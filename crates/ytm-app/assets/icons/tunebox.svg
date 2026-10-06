@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26262B"/><stop offset="1" stop-color="#0B0B0D"/>
+    </linearGradient>
+    <linearGradient id="disc" x1="0.3" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#FF4D6D"/><stop offset="1" stop-color="#C8002A"/>
+    </linearGradient>
+    <radialGradient id="glow"><stop offset="0.6" stop-color="#FF0033" stop-opacity="0.35"/><stop offset="1" stop-color="#FF0033" stop-opacity="0"/></radialGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="url(#plate)"/>
+  <circle cx="256" cy="256" r="256" fill="url(#glow)"/>
+  <circle cx="256" cy="256" r="207" fill="none" stroke="#FF3355" stroke-opacity="0.22" stroke-width="2"/>
+  <circle cx="256" cy="256" r="233" fill="none" stroke="#FF3355" stroke-opacity="0.10" stroke-width="2"/>
+  <circle cx="256" cy="256" r="171" fill="url(#disc)"/>
+  <path d="M222 188 L222 330 L340 262 Z" fill="#600014" fill-opacity="0.28" filter="url(#soft)" transform="translate(0 6)"/>
+  <path d="M222 190 L222 322 L336 256 Z" fill="#fff" stroke="#fff" stroke-width="28" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,69 @@
+[package]
+name = "ytm-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+async-trait = "0.1.92"
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "glow", "wayland", "x11", "default_fonts", "accesskit"] }
+egui-phosphor = { version = "0.14", features = ["fill"] }
+egui_extras = { version = "0.36", features = ["image", "file"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+rfd = "0.17.2"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "gzip"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+souvlaki = "0.8"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+tracing = "0.1.44"
+ytm-api = { version = "0.1.0", path = "../ytm-api" }
+ytm-core = { version = "0.1.0", path = "../ytm-core" }
+ytm-player = { version = "0.1.0", path = "../ytm-player" }
+notify-rust = "4.18.1"
+
+[[bin]]
+name = "tunebox"
+path = "src/main.rs"
+
+# Packaging: `cargo build --release -p ytm-app && cd crates/ytm-app && cargo packager --release --formats deb`
+# (macOS: `--formats app,dmg`). Needs `cargo install cargo-packager --locked`.
+[package.metadata.packager]
+product-name = "Tunebox"
+identifier = "dev.tunebox.Tunebox"
+description = "A native desktop client for YouTube Music"
+long-description = "Tunebox is a native, browser-free desktop client for YouTube Music built with Rust and egui."
+authors = ["Tunebox contributors"]
+category = "Music"
+license-file = "../../LICENSE"
+icons = [
+    "assets/icons/32x32.png",
+    "assets/icons/128x128.png",
+    "assets/icons/256x256.png",
+    "assets/icons/512x512.png",
+]
+binaries-dir = "../../target/release"
+out-dir = "../../dist"
+binaries = [{ path = "tunebox", main = true }]
+
+[package.metadata.packager.deb]
+depends = ["libasound2t64 | libasound2", "libdbus-1-3", "libxkbcommon0", "libgl1", "libvulkan1"]
+section = "sound"
+
+[package.metadata.packager.macos]
+minimum-system-version = "12.0"
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = "0.3.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWorkspace", "NSRunningApplication", "libc"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tray-icon = { version = "0.26.0", default-features = false }
