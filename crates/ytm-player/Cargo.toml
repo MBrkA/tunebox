@@ -1,0 +1,25 @@
+[package]
+name = "ytm-player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audioadapter-buffers = "2"
+cpal = "0.17.3"
+fastrand = "2.5.0"
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls", "blocking"] }
+rubato = "1.0.1"
+symphonia = { version = "0.5.5", features = ["aac", "isomp4"] }
+thiserror = "2.0.21"
+tokio = { version = "1.53.2", features = ["rt", "sync", "macros", "time"] }
+tracing = "0.1.44"
+ytm-api = { version = "0.1.0", path = "../ytm-api" }
+ytm-core = { version = "0.1.0", path = "../ytm-core" }
+
+[dev-dependencies]
+anyhow = "1.0.104"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "io-std", "io-util"] }
+symphonia = { version = "0.5.5", features = ["wav", "pcm"] }
+async-trait = "0.1"
