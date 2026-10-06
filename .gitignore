@@ -1,0 +1,6 @@
+/target
+*.swp
+.DS_Store
+/dist
+/.claude/worktrees/
+.claude/settings.local.json
