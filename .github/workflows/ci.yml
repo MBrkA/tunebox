@@ -1,0 +1,122 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Also build installers (.deb/AppImage, .app/.dmg)"
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+# A newer push to the same branch/PR supersedes the running one (tags are never cancelled).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libssl-dev libdbus-1-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # Hermetic tests only: no network, no sound card.
+      - run: cargo test --workspace
+      - run: cargo build --release --workspace
+
+  package:
+    # Manual run with the "package" box ticked, or a v* tag (feeds the release job).
+    if: (github.event_name == 'workflow_dispatch' && inputs.package) || startsWith(github.ref, 'refs/tags/')
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            formats: deb,appimage
+          - os: macos-14
+            formats: app,dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libssl-dev libdbus-1-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev
+      - run: cargo install cargo-packager --locked
+      - run: cargo build --release -p ytm-app
+      - run: cargo packager --release --formats ${{ matrix.formats }}
+        working-directory: crates/ytm-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tunebox-${{ matrix.os }}
+          path: dist/*
+
+  windows:
+    # Native MSVC build of the Windows exe (the zig cross-build in scripts/package-windows.sh is for local use).
+    # Not run on pull requests: the build is slow and Windows is not a verified target yet.
+    if: github.event_name != 'pull_request'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # puts rc.exe on PATH so build.rs can embed the icon
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: cargo build --release -p ytm-app
+      - name: Tests (informational until they have run on Windows at least once)
+        run: cargo test --workspace
+        continue-on-error: true
+      - name: Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/tunebox-windows-x64 | Out-Null
+          Copy-Item target/release/tunebox.exe dist/tunebox-windows-x64/
+          Copy-Item LICENSE dist/tunebox-windows-x64/LICENSE.txt
+          Compress-Archive -Path dist/tunebox-windows-x64 -DestinationPath dist/tunebox-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tunebox-windows-x64
+          path: dist/tunebox-windows-x64.zip
+
+  release:
+    # On a v* tag: attach the .deb/AppImage, .app/.dmg and Windows zip to a *draft* GitHub release to review and publish.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [package, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: artifacts/**/*
