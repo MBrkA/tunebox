@@ -99,7 +99,7 @@ fn confirm_restore(ctx: &Context, app: &mut AppState) {
     });
     if apply {
         app.run(UiAction::ApplyRestore);
-        theme::set_mode(ctx, theme::Mode::from_code(&app.config.theme));
+        theme::apply_pref(ctx, theme::Pref::from_code(&app.config.theme));
     } else if cancel {
         app.pending_restore = None;
         app.pending_restore_settings = None;

@@ -101,8 +101,7 @@ pub fn show(ui: &mut Ui, app: &mut AppState) {
     }
 
     let playing = ps.status == ytm_player::Status::Playing;
-    let mut jump = None;
-    let mut remove = None;
+    let mut acts = Acts::default();
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
@@ -116,7 +115,7 @@ pub fn show(ui: &mut Ui, app: &mut AppState) {
                 r.context_menu(|ui| {
                     crate::views::common::style_menu(ui);
                     if ui.button(crate::i18n::t("Remove from queue")).clicked() {
-                        remove = Some(i);
+                        acts.remove = Some(i);
                         ui.close();
                     }
                 });
@@ -127,32 +126,143 @@ pub fn show(ui: &mut Ui, app: &mut AppState) {
                         .size(12.5),
                 );
             }
-            let upcoming = ps.upcoming.clone();
-            for &idx in upcoming.iter() {
-                let track = &ps.tracks[idx];
-                let r = widgets::track_row(ui, track, None, false, false);
-                if r.clicked() {
-                    jump = Some(idx);
-                }
-                r.context_menu(|ui| {
-                    crate::views::common::style_menu(ui);
-                    if ui.button(crate::i18n::t("Play now")).clicked() {
-                        jump = Some(idx);
-                        ui.close();
-                    }
-                    if ui.button(crate::i18n::t("Remove from queue")).clicked() {
-                        remove = Some(idx);
-                        ui.close();
-                    }
-                });
-            }
+            upcoming_rows(ui, &ps.tracks, &ps.upcoming, &mut acts);
         });
-    if let Some(i) = jump {
+    if let Some(i) = acts.jump {
         app.playback(Command::Jump(i));
     }
-    if let Some(i) = remove {
+    if let Some(i) = acts.remove {
         app.playback(Command::Remove(i));
     }
+    if let Some((from, to)) = acts.moved {
+        app.playback(Command::MoveUpcoming { from, to });
+    }
+}
+
+/// What the queue's rows asked for this frame; applied after drawing.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Acts {
+    jump: Option<usize>,
+    remove: Option<usize>,
+    /// Positions within the "next up" list: (from, to).
+    moved: Option<(usize, usize)>,
+}
+
+/// The "Next up" rows. Click plays one, the context menu removes it, and dragging a row moves it:
+/// an insertion line shows where it will land and the move is only reported on release.
+fn upcoming_rows(ui: &mut Ui, tracks: &[ytm_api::Track], upcoming: &[usize], acts: &mut Acts) {
+    let n = upcoming.len();
+    let key = Id::new("queue_drag");
+    let mut dragging: Option<usize> = ui.data(|d| d.get_temp::<usize>(key));
+    let spacing = ui.spacing().item_spacing.y;
+    let left = ui.cursor().left();
+    let width = ui.available_width();
+    let mut rects = Vec::with_capacity(n);
+    let mut started = None;
+    for (slot, &idx) in upcoming.iter().enumerate() {
+        let track = &tracks[idx];
+        let r =
+            widgets::track_row_sense(ui, track, None, false, false, egui::Sense::click_and_drag());
+        rects.push(r.rect);
+        if r.drag_started() {
+            started = Some(slot);
+        }
+        if dragging == Some(slot) {
+            ui.painter().rect_filled(
+                r.rect,
+                egui::CornerRadius::same(10),
+                theme::c_bg().gamma_multiply(0.67),
+            );
+        }
+        if r.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        if r.clicked() {
+            acts.jump = Some(idx);
+        }
+        r.context_menu(|ui| {
+            crate::views::common::style_menu(ui);
+            if ui.button(crate::i18n::t("Play now")).clicked() {
+                acts.jump = Some(idx);
+                ui.close();
+            }
+            if ui.button(crate::i18n::t("Remove from queue")).clicked() {
+                acts.remove = Some(idx);
+                ui.close();
+            }
+        });
+    }
+    if started.is_some() {
+        dragging = started;
+    }
+    if let Some(from) = dragging {
+        let pointer = ui.input(|i| i.pointer.latest_pos());
+        let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        match pointer {
+            Some(pos) if !cancelled && from < n => {
+                let gaps: Vec<f32> = (0..=n)
+                    .map(|g| match rects.get(g) {
+                        Some(r) => r.top() - spacing / 2.0,
+                        None => rects.last().map_or(0.0, |r| r.bottom() + spacing / 2.0),
+                    })
+                    .collect();
+                let gap = widgets::drop_gap(pos.y, &gaps);
+                let target = widgets::drop_target(from, gap);
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                    egui::Order::Tooltip,
+                    Id::new("queue_drag_layer"),
+                ));
+                if target.is_some() {
+                    let y = gaps[gap];
+                    painter.line_segment(
+                        [pos2(left, y), pos2(left + width, y)],
+                        egui::Stroke::new(3.0, theme::ACCENT),
+                    );
+                    painter.circle_filled(pos2(left, y), 5.0, theme::ACCENT);
+                }
+                let ghost = Rect::from_center_size(
+                    pos2(left + width / 2.0, pos.y),
+                    egui::vec2(width, widgets::ROW_HEIGHT - 8.0),
+                );
+                painter.rect_filled(
+                    ghost,
+                    egui::CornerRadius::same(10),
+                    theme::c_surface_active(),
+                );
+                painter.text(
+                    ghost.left_center() + egui::vec2(16.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    &tracks[upcoming[from]].title,
+                    egui::FontId::new(14.0, theme::bold_family()),
+                    theme::c_text(),
+                );
+                let clip = ui.clip_rect();
+                if pos.y < clip.top() + 48.0 {
+                    ui.scroll_with_delta(egui::vec2(0.0, 14.0));
+                } else if pos.y > clip.bottom() - 48.0 {
+                    ui.scroll_with_delta(egui::vec2(0.0, -14.0));
+                }
+                ui.ctx().request_repaint();
+                if ui.input(|i| i.pointer.any_released()) {
+                    if let Some(to) = target {
+                        acts.moved = Some((from, to));
+                    }
+                    dragging = None;
+                }
+            }
+            _ => dragging = None,
+        }
+    }
+    ui.data_mut(|d| {
+        match dragging {
+            Some(v) => {
+                d.insert_temp(key, v);
+            }
+            None => {
+                d.remove_temp::<usize>(key);
+            }
+        };
+    });
 }
 
 #[cfg(test)]
@@ -184,5 +294,161 @@ mod tests {
             drawer_rect(content, 0.0, 0.0, 1.0),
             "progress is clamped"
         );
+    }
+
+    // ---- dragging the "next up" rows, through real egui frames -----------------------------
+
+    use eframe::egui::{Event, PointerButton, RawInput};
+
+    const SCREEN: egui::Vec2 = egui::vec2(500.0, 700.0);
+
+    struct Harness {
+        ctx: Context,
+        tracks: Vec<ytm_api::Track>,
+        upcoming: Vec<usize>,
+        top: f32,
+        acts: Acts,
+    }
+
+    impl Harness {
+        /// Track 0 is playing; tracks 1..n are "next up".
+        fn new(n: usize) -> Self {
+            let mut h = Self {
+                ctx: Context::default(),
+                tracks: (0..n)
+                    .map(|i| ytm_api::Track {
+                        video_id: format!("{i:011}"),
+                        title: format!("t{i}"),
+                        ..ytm_api::Track::default()
+                    })
+                    .collect(),
+                upcoming: (1..n).collect(),
+                top: 0.0,
+                acts: Acts::default(),
+            };
+            crate::theme::install(&h.ctx);
+            h.frame(vec![]);
+            h
+        }
+
+        fn frame(&mut self, events: Vec<Event>) {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), SCREEN)),
+                events,
+                ..RawInput::default()
+            };
+            let (tracks, upcoming, top, acts) =
+                (&self.tracks, &self.upcoming, &mut self.top, &mut self.acts);
+            let mut out = self.ctx.run_ui(input, |ui| {
+                *top = ui.cursor().top();
+                upcoming_rows(ui, tracks, upcoming, acts);
+            });
+            out.textures_delta.clear();
+        }
+
+        fn pitch(&self) -> f32 {
+            self.ctx.global_style().spacing.item_spacing.y + widgets::ROW_HEIGHT
+        }
+
+        /// Centre of the row in "next up" slot `i`.
+        fn row(&self, i: usize) -> egui::Pos2 {
+            pos2(
+                SCREEN.x / 2.0,
+                self.top + i as f32 * self.pitch() + widgets::ROW_HEIGHT / 2.0,
+            )
+        }
+
+        /// The line between rows: gap `g` is just above slot `g`.
+        fn gap(&self, g: usize) -> egui::Pos2 {
+            pos2(SCREEN.x / 2.0, self.top + g as f32 * self.pitch())
+        }
+
+        fn button(&mut self, at: egui::Pos2, pressed: bool) {
+            self.frame(vec![Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]);
+        }
+
+        fn press(&mut self, at: egui::Pos2) {
+            self.frame(vec![Event::PointerMoved(at)]);
+            self.button(at, true);
+        }
+
+        fn drag_to(&mut self, from: egui::Pos2, to: egui::Pos2) {
+            for step in 1..=6 {
+                let t = step as f32 / 6.0;
+                self.frame(vec![Event::PointerMoved(from + (to - from) * t)]);
+            }
+        }
+
+        fn drag(&mut self, from: egui::Pos2, to: egui::Pos2) {
+            self.press(from);
+            self.drag_to(from, to);
+            self.button(to, false);
+            self.frame(vec![]);
+        }
+    }
+
+    #[test]
+    fn dragging_a_row_down_moves_it_only_on_release() {
+        let mut h = Harness::new(5); // next up: t1 t2 t3 t4
+        let (from, to) = (h.row(0), h.gap(3)); // t1 to just above t4
+        h.press(from);
+        h.drag_to(from, to);
+        assert_eq!(h.acts, Acts::default(), "nothing is applied mid-drag");
+        h.button(to, false);
+        h.frame(vec![]);
+        assert_eq!(h.acts.moved, Some((0, 2)), "{:?}", h.acts);
+        assert_eq!(h.acts.jump, None, "a drag is not a click");
+    }
+
+    #[test]
+    fn dragging_up_and_past_the_ends_clamps() {
+        let mut h = Harness::new(5);
+        let (from, to) = (h.row(3), h.gap(0));
+        h.drag(from, to);
+        assert_eq!(h.acts.moved, Some((3, 0)));
+
+        let mut h = Harness::new(5);
+        let (from, far_below) = (h.row(0), pos2(SCREEN.x / 2.0, h.top + 650.0));
+        h.drag(from, far_below);
+        assert_eq!(h.acts.moved, Some((0, 3)), "below the list means last");
+    }
+
+    #[test]
+    fn a_plain_click_plays_that_song_and_dropping_in_place_does_nothing() {
+        let mut h = Harness::new(5);
+        let at = h.row(2);
+        h.press(at);
+        h.button(at, false);
+        h.frame(vec![]);
+        assert_eq!(h.acts.jump, Some(3), "slot 2 is track 3");
+        assert_eq!(h.acts.moved, None);
+
+        let mut h = Harness::new(5);
+        let (from, nearby) = (h.row(1), h.row(1) + vec2(0.0, 8.0));
+        h.drag(from, nearby);
+        assert_eq!(h.acts.moved, None);
+    }
+
+    #[test]
+    fn escape_cancels_a_drag() {
+        let mut h = Harness::new(5);
+        let (from, to) = (h.row(0), h.row(3));
+        h.press(from);
+        h.drag_to(from, to);
+        h.frame(vec![Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }]);
+        h.button(to, false);
+        h.frame(vec![]);
+        assert_eq!(h.acts.moved, None);
     }
 }

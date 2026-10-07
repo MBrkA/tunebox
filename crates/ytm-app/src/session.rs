@@ -75,6 +75,19 @@ impl Session {
     }
 }
 
+/// Track indices in the order they should be saved so a restored (unshuffled) queue plays the
+/// same way: the already-played ones, the current one, then the upcoming ones as the user ordered
+/// them (drag-to-reorder). Returns the order and where the current track lands in it.
+pub fn save_order(len: usize, current: usize, upcoming: &[usize]) -> (Vec<usize>, usize) {
+    let mut before: Vec<usize> = (0..len)
+        .filter(|i| *i != current && !upcoming.contains(i))
+        .collect();
+    let at = before.len();
+    before.push(current);
+    before.extend_from_slice(upcoming);
+    (before, at)
+}
+
 /// Forgets the saved session (when the user turns the option off).
 pub fn clear() {
     if let Some(p) = path() {
@@ -91,6 +104,14 @@ pub fn load() -> Option<Session> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_order_keeps_the_users_upcoming_order() {
+        // 0 played, 1 current, upcoming dragged into 4, 2, 3
+        assert_eq!(save_order(5, 1, &[4, 2, 3]), (vec![0, 1, 4, 2, 3], 1));
+        assert_eq!(save_order(3, 0, &[1, 2]), (vec![0, 1, 2], 0));
+        assert_eq!(save_order(3, 2, &[]), (vec![0, 1, 2], 2));
+    }
 
     #[test]
     fn roundtrip_and_empty_session() {

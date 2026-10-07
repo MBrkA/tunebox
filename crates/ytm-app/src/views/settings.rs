@@ -3,7 +3,7 @@ use egui_phosphor::regular as icon;
 
 use crate::i18n::{self, t, Lang};
 use crate::state::{AppState, UiAction};
-use crate::theme::{self, c_text, c_text_dim, Mode};
+use crate::theme::{self, c_text, c_text_dim, Pref};
 use crate::widgets;
 
 pub const DEVELOPER: &str = "MBrkA";
@@ -110,8 +110,22 @@ fn switch(ui: &mut Ui, label: &str, on: &mut bool) -> bool {
 }
 
 fn toggle_row(ui: &mut Ui, title: &str, hint: Option<&str>, value: &mut bool) -> bool {
+    toggle_row_if(ui, title, hint, value, true)
+}
+
+/// A toggle row that is greyed out and ignores clicks while `enabled` is false (it depends on
+/// another setting). Returns true when the value was changed this frame.
+fn toggle_row_if(
+    ui: &mut Ui,
+    title: &str,
+    hint: Option<&str>,
+    value: &mut bool,
+    enabled: bool,
+) -> bool {
     let mut changed = false;
-    row(ui, title, hint, |ui| changed = switch(ui, title, value));
+    ui.add_enabled_ui(enabled, |ui| {
+        row(ui, title, hint, |ui| changed = switch(ui, title, value));
+    });
     changed
 }
 
@@ -142,45 +156,64 @@ fn page(ui: &mut Ui, app: &mut AppState, out: &mut Vec<UiAction>) {
 
     // ---- appearance & language ------------------------------------------
     card(ui, icon::PALETTE, t("Appearance"), |ui| {
-        let mut mode = theme::mode();
+        let current_pref = Pref::from_code(&app.config.theme);
+        let mut pref = current_pref;
         row(ui, t("Theme"), None, |ui| {
-            // Right-to-left layout: added in reverse so Dark reads first.
-            for (m, label) in [(Mode::Light, t("Light")), (Mode::Dark, t("Dark"))] {
-                if widgets::pill(ui, label, mode == m).clicked() {
-                    mode = m;
+            // Right-to-left layout: added in reverse so System reads first.
+            for (p, label) in [
+                (Pref::Dark, t("Dark")),
+                (Pref::Light, t("Light")),
+                (Pref::System, t("System")),
+            ] {
+                if widgets::pill(ui, label, pref == p).clicked() {
+                    pref = p;
                 }
             }
         });
-        if mode != theme::mode() {
-            theme::set_mode(ui.ctx(), mode);
-            app.config.theme = mode.code().into();
+        if pref != current_pref {
+            theme::apply_pref(ui.ctx(), pref);
+            app.config.theme = pref.code().into();
             save_config(app);
         }
 
         divider(ui);
+        let follows_system = app
+            .config
+            .ui_language
+            .trim()
+            .eq_ignore_ascii_case(i18n::SYSTEM);
         let current = i18n::current();
-        let mut chosen = current;
+        // `None` = follow the operating system
+        let before: Option<Lang> = (!follows_system).then_some(current);
+        let mut chosen = before;
+        let shown = if follows_system {
+            format!("{} ({})", t("System default"), current.native_name())
+        } else {
+            current.native_name().to_owned()
+        };
         row(
             ui,
             t("Interface language"),
             Some(t("Changes apply immediately.")),
             |ui| {
                 egui::ComboBox::from_id_salt("ui_language")
-                    .selected_text(current.native_name())
-                    .width(150.0)
+                    .selected_text(shown)
+                    .width(190.0)
                     .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut chosen, None, t("System default"));
                         for l in Lang::ALL {
-                            ui.selectable_value(&mut chosen, l, l.native_name());
+                            ui.selectable_value(&mut chosen, Some(l), l.native_name());
                         }
                     });
             },
         );
-        if chosen != current {
-            i18n::set(chosen);
-            app.config.ui_language = chosen.code().into();
-            app.config.language = chosen.hl().into();
+        if chosen != before {
+            let lang = chosen.unwrap_or_else(i18n::system_lang);
+            i18n::set(lang);
+            app.config.ui_language = chosen.map_or(i18n::SYSTEM, Lang::code).into();
+            app.config.language = lang.hl().into();
             save_config(app);
-            app.language_changed(chosen.hl());
+            app.language_changed(lang.hl());
         }
     });
 
@@ -207,31 +240,70 @@ fn page(ui: &mut Ui, app: &mut AppState, out: &mut Vec<UiAction>) {
             app.config.refresh_minutes = chosen;
             save_config(app);
         }
+        divider(ui);
+        if toggle_row(
+            ui,
+            t("Keep listening history"),
+            Some(t(
+                "Remembers what you play on this device for Home and the History page.",
+            )),
+            &mut app.config.record_history,
+        ) {
+            save_config(app);
+            app.history_setting_changed();
+        }
+        divider(ui);
+        if toggle_row(
+            ui,
+            t("Synced lyrics"),
+            Some(t(
+                "Looks up time-synced lyrics on lrclib.net. Sends the song title, artist, album and length.",
+            )),
+            &mut app.config.synced_lyrics,
+        ) {
+            save_config(app);
+            app.synced_lyrics_setting_changed();
+        }
     });
 
     // ---- desktop -----------------------------------------------------------
     card(ui, icon::DESKTOP, t("Desktop"), |ui| {
         if toggle_row(ui, t("Show tray icon"), None, &mut app.config.tray_icon) {
+            // without a tray icon the two options below are off, not just greyed out
+            app.config.normalize();
             save_config(app);
             app.toast(t("Applies the next time Tunebox starts.").to_owned());
         }
+        // These two only mean something with a tray icon, so they follow its switch.
+        let tray_on = app.config.tray_icon;
+        let needs_tray = Some(t("Turn on “Show tray icon” to use this."));
         divider(ui);
-        if toggle_row(
+        if toggle_row_if(
             ui,
             t("Show the song next to the tray icon"),
-            Some(t(
-                "Needs a tray host that shows labels, e.g. GNOME's AppIndicator extension.",
-            )),
+            if tray_on {
+                Some(t(
+                    "Needs a tray host that shows labels, e.g. GNOME's AppIndicator extension.",
+                ))
+            } else {
+                needs_tray
+            },
             &mut app.config.tray_label,
+            tray_on,
         ) {
             save_config(app);
         }
         divider(ui);
-        if toggle_row(
+        if toggle_row_if(
             ui,
             t("Closing the window keeps Tunebox running in the tray"),
-            Some(t("Only works while the tray icon is showing.")),
+            if tray_on {
+                Some(t("Only works while the tray icon is showing."))
+            } else {
+                needs_tray
+            },
             &mut app.config.close_to_tray,
+            tray_on,
         ) {
             save_config(app);
             app.toast(t("Applies the next time Tunebox starts.").to_owned());
@@ -361,5 +433,62 @@ fn open_folder(dir: &std::path::Path) {
     let program = "xdg-open";
     if let Err(e) = std::process::Command::new(program).arg(dir).spawn() {
         tracing::warn!("could not open {}: {e}", dir.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{pos2, Event, PointerButton, RawInput, Rect};
+
+    /// Draws one toggle row in a 600 px wide screen and clicks its switch (at the right edge).
+    fn click_switch(enabled: bool) -> bool {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut value = false;
+        let mut y = 0.0;
+        let frame = |events: Vec<Event>, value: &mut bool, y: &mut f32| {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    pos2(0.0, 0.0),
+                    egui::vec2(600.0, 200.0),
+                )),
+                events,
+                ..RawInput::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                toggle_row_if(ui, "Closing", Some("hint"), value, enabled);
+                *y = ui.min_rect().center().y;
+            });
+            out.textures_delta.clear();
+        };
+        frame(vec![], &mut value, &mut y);
+        let at = pos2(600.0 - 22.0, y);
+        frame(vec![Event::PointerMoved(at)], &mut value, &mut y);
+        for pressed in [true, false] {
+            frame(
+                vec![Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }],
+                &mut value,
+                &mut y,
+            );
+        }
+        value
+    }
+
+    #[test]
+    fn a_setting_that_depends_on_another_cannot_be_changed_while_that_is_off() {
+        assert!(
+            click_switch(true),
+            "the click really hits the switch when enabled"
+        );
+        assert!(
+            !click_switch(false),
+            "the same click does nothing while disabled"
+        );
     }
 }

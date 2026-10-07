@@ -40,7 +40,11 @@ pub enum Action {
         id: String,
         token: String,
     },
-    LoadLyrics(String),
+    /// Lyrics for a track; `synced` also asks LRCLIB for timestamps.
+    LoadLyrics {
+        track: Track,
+        synced: bool,
+    },
     LoadNewReleases,
     /// Charts for a country code; empty = let YouTube choose.
     LoadCharts(String),
@@ -72,6 +76,12 @@ pub enum Action {
     /// Replace the queue with the radio seeded from this track.
     StartRadio(String),
     Playback(Command),
+    /// Append one line to the listening history file.
+    AppendHistory(String),
+    /// Delete the listening history file.
+    ClearHistory,
+    /// Fetch "more like this" for each seed track (answered with `Event::Recommendation`s).
+    LoadRecommendations(Vec<Track>),
 }
 
 /// Results flowing back to the UI.
@@ -121,6 +131,11 @@ pub enum Event {
         video_id: String,
         result: Result<Option<Lyrics>, String>,
     },
+    /// Tracks similar to `seed` (its radio).
+    Recommendation {
+        seed: Track,
+        result: Result<Vec<Track>, String>,
+    },
     /// A playlist file the user picked, already parsed.
     PlaylistImported {
         title: String,
@@ -154,6 +169,16 @@ pub struct Backend {
 }
 
 impl Backend {
+    /// `history.jsonl` next to the library file (it follows a moved data folder).
+    fn history_path(&self) -> Option<std::path::PathBuf> {
+        let lib = self
+            .local_path
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()?;
+        Some(crate::history::file_for(&lib))
+    }
+
     pub fn spawn(
         rt: &tokio::runtime::Handle,
         api: Arc<dyn MusicApi>,
@@ -371,11 +396,30 @@ impl Backend {
                     this.emit(Event::PlaylistMore { id, result });
                 });
             }
-            Action::LoadLyrics(video_id) => {
+            Action::LoadLyrics { track, synced } => {
                 let this = self.clone();
                 rt.spawn(async move {
-                    let result = this.api.lyrics(&video_id).await.map_err(|e| e.to_string());
-                    this.emit(Event::Lyrics { video_id, result });
+                    let plain = this.api.lyrics(&track.video_id);
+                    let timed = async {
+                        if synced {
+                            // best effort: a failing lyrics service must not hide YouTube's text
+                            match this.api.synced_lyrics(&track).await {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    tracing::debug!(error = %e, "synced lyrics lookup failed");
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    let (plain, timed) = tokio::join!(plain, timed);
+                    let result = merge_lyrics(plain.map_err(|e| e.to_string()), timed);
+                    this.emit(Event::Lyrics {
+                        video_id: track.video_id,
+                        result,
+                    });
                 });
             }
             Action::StartRadio(video_id) => {
@@ -495,6 +539,47 @@ impl Backend {
                     }
                 });
             }
+            Action::AppendHistory(text) => {
+                let Some(path) = self.history_path() else {
+                    return;
+                };
+                let lock = self.local_write.clone();
+                rt.spawn_blocking(move || {
+                    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Err(e) = crate::history::append(&path, &text) {
+                        tracing::warn!(error = %e, "could not write listening history");
+                    }
+                });
+            }
+            Action::ClearHistory => {
+                let Some(path) = self.history_path() else {
+                    return;
+                };
+                let lock = self.local_write.clone();
+                rt.spawn_blocking(move || {
+                    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    match std::fs::remove_file(&path) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                            tracing::warn!(error = %e, "could not delete listening history");
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            Action::LoadRecommendations(seeds) => {
+                for seed in seeds {
+                    let this = self.clone();
+                    rt.spawn(async move {
+                        let result = this
+                            .api
+                            .up_next(&seed.video_id)
+                            .await
+                            .map(|n| n.tracks)
+                            .map_err(|e| e.to_string());
+                        this.emit(Event::Recommendation { seed, result });
+                    });
+                }
+            }
             Action::Suggest { seq, query } => {
                 let this = self.clone();
                 rt.spawn(async move {
@@ -510,6 +595,22 @@ impl Backend {
 
 /// Copies everything in the data folder to `target`, makes it the data folder and points the
 /// library there. Never overwrites: a folder that already holds Tunebox data is refused.
+/// Synced lyrics win when there are any; otherwise YouTube's plain text (or its error) stands.
+fn merge_lyrics(
+    plain: Result<Option<Lyrics>, String>,
+    synced: Option<Lyrics>,
+) -> Result<Option<Lyrics>, String> {
+    match synced {
+        Some(s) if !s.synced.is_empty() => Ok(Some(s)),
+        // LRCLIB only had plain text: use it when YouTube has none
+        Some(s) => match plain {
+            Ok(None) | Err(_) => Ok(Some(s)),
+            ok => ok,
+        },
+        None => plain,
+    }
+}
+
 fn move_data_dir(
     this: &Backend,
     snapshot: &crate::local::Snapshot,
@@ -555,4 +656,54 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ytm_api::LyricLine;
+
+    fn plain(text: &str) -> Lyrics {
+        Lyrics {
+            text: text.into(),
+            source: Some("YouTube".into()),
+            synced: Vec::new(),
+        }
+    }
+
+    fn timed() -> Lyrics {
+        Lyrics {
+            text: "a".into(),
+            source: Some("LRCLIB".into()),
+            synced: vec![LyricLine {
+                time_ms: 1,
+                text: "a".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn synced_lyrics_win_and_plain_text_is_the_fallback() {
+        let m = merge_lyrics(Ok(Some(plain("yt"))), Some(timed()))
+            .unwrap()
+            .unwrap();
+        assert!(!m.synced.is_empty());
+        // no synced result: YouTube's text, or its error, is untouched
+        let m = merge_lyrics(Ok(Some(plain("yt"))), None).unwrap().unwrap();
+        assert_eq!((m.text.as_str(), m.synced.len()), ("yt", 0));
+        assert!(merge_lyrics(Err("boom".into()), None).is_err());
+        assert!(merge_lyrics(Ok(None), None).unwrap().is_none());
+        // YouTube failed but LRCLIB has them: still show lyrics
+        assert!(merge_lyrics(Err("boom".into()), Some(timed()))
+            .unwrap()
+            .is_some());
+        // LRCLIB had plain text only: YouTube's wins, but fills a gap
+        let only_plain = plain("lrc");
+        let m = merge_lyrics(Ok(Some(plain("yt"))), Some(only_plain.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.text, "yt");
+        let m = merge_lyrics(Ok(None), Some(only_plain)).unwrap().unwrap();
+        assert_eq!(m.text, "lrc");
+    }
 }

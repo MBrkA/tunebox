@@ -191,6 +191,7 @@ fn lyrics(ui: &mut Ui, app: &mut AppState) {
                         .color(c_text_dim()),
                 );
             }
+            Some(l) if !l.synced.is_empty() => synced_lyrics(ui, app, l),
             Some(l) => {
                 egui::ScrollArea::vertical()
                     .id_salt(("lyrics", app.lyrics.video_id.clone()))
@@ -223,5 +224,75 @@ fn lyrics(ui: &mut Ui, app: &mut AppState) {
                     });
             }
         },
+    }
+}
+
+/// Time-synced lyrics: the line being sung is bright, the rest dim; the list follows the song
+/// (only when the line changes, so scrolling by hand is not fought) and a click seeks to a line.
+fn synced_lyrics(ui: &mut Ui, app: &mut AppState, l: &ytm_api::Lyrics) {
+    let position_ms = app.player.position().as_millis() as u64;
+    let current = l.current_line(position_ms);
+    let key = egui::Id::new(("synced_lyrics_line", &app.lyrics.video_id));
+    let last: Option<Option<usize>> = ui.data(|d| d.get_temp(key));
+    let follow = last != Some(current);
+    let mut seek = None;
+    egui::ScrollArea::vertical()
+        .id_salt(("lyrics", app.lyrics.video_id.clone()))
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 10.0;
+            ui.add_space(6.0);
+            for (i, line) in l.synced.iter().enumerate() {
+                let is_current = current == Some(i);
+                let text = if line.text.is_empty() {
+                    "♪"
+                } else {
+                    &line.text
+                };
+                let alpha = if is_current { 255 } else { 105 };
+                let r = ui.add(
+                    egui::Label::new(
+                        theme::bold(text)
+                            .size(if is_current { 26.0 } else { 22.0 })
+                            .color(Color32::from_white_alpha(alpha)),
+                    )
+                    .wrap()
+                    .sense(Sense::click()),
+                );
+                if r.hovered() && !is_current {
+                    ui.painter().text(
+                        pos2(r.rect.right() + 8.0, r.rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        icon::PLAY,
+                        FontId::new(14.0, theme::icons()),
+                        theme::c_text_faint(),
+                    );
+                }
+                if r.clone()
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    seek = Some(line.time_ms);
+                }
+                if is_current && follow {
+                    r.scroll_to_me(Some(egui::Align::Center));
+                }
+            }
+            if let Some(src) = &l.source {
+                ui.add_space(18.0);
+                ui.label(
+                    egui::RichText::new(src)
+                        .color(theme::c_text_faint())
+                        .size(12.0),
+                );
+            }
+            // room to scroll the last line up to the middle
+            ui.add_space(ui.available_height().max(160.0));
+        });
+    ui.data_mut(|d| d.insert_temp(key, current));
+    if let Some(ms) = seek {
+        app.playback(ytm_player::Command::Seek(std::time::Duration::from_millis(
+            ms,
+        )));
     }
 }

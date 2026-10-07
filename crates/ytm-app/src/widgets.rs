@@ -275,14 +275,38 @@ fn paint_art_impl(ui: &mut Ui, rect: Rect, url: Option<&str>, radius: CornerRadi
         .fit_to_exact_size(rect.size())
         .maintain_aspect_ratio(false);
     if url.contains("ytimg.com") {
-        // 16:9 / 4:3 video frames: crop to the centre square.
-        image = image.uv(Rect::from_min_max(pos2(0.125, 0.125), pos2(0.875, 0.875)));
+        // 16:9 / 4:3 video frames: crop to the centre square of the real picture, which needs the
+        // texture size (known once it has loaded; until then nothing is painted anyway).
+        if let Ok(egui::load::TexturePoll::Ready { texture }) =
+            image.load_for_size(ui.ctx(), rect.size())
+        {
+            image = image.uv(video_square_uv(texture.size));
+        }
     }
     if place {
         ui.put(rect, image);
     } else {
         image.paint_at(ui, rect);
     }
+}
+
+/// The part of a YouTube video thumbnail (texture `size` in pixels) that shows as a square, as uv
+/// coordinates. 16:9 frames (maxres/mq) fill the height and are cropped left and right. 4:3 frames
+/// (sddefault/hqdefault) carry black bars above and below a 16:9 picture, so the bars are cut
+/// first. Cutting by the real size keeps the crop square, so the image is not stretched.
+fn video_square_uv(size: Vec2) -> Rect {
+    if size.x <= 0.0 || size.y <= 0.0 {
+        return Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    }
+    let aspect = size.x / size.y;
+    let (y0, y1) = if aspect < 1.5 {
+        (0.125, 0.875)
+    } else {
+        (0.0, 1.0)
+    };
+    let side_px = size.y * (y1 - y0);
+    let half_w = (side_px / size.x / 2.0).min(0.5);
+    Rect::from_min_max(pos2(0.5 - half_w, y0), pos2(0.5 + half_w, y1))
 }
 
 /// 2×2 collage of song covers. With fewer than four covers the remaining cells stay empty.
@@ -428,8 +452,20 @@ pub fn track_row(
     current: bool,
     playing: bool,
 ) -> Response {
+    track_row_sense(ui, track, number, current, playing, Sense::click())
+}
+
+/// `track_row` with a custom `Sense` (the queue rows add dragging).
+pub fn track_row_sense(
+    ui: &mut Ui,
+    track: &Track,
+    number: Option<usize>,
+    current: bool,
+    playing: bool,
+    sense: Sense,
+) -> Response {
     let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), sense);
     if !ui.is_rect_visible(rect) {
         return resp;
     }
@@ -969,6 +1005,35 @@ pub fn vertical_gradient(painter: &Painter, rect: Rect, top: Color32, bottom: Co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_covers_are_cropped_to_a_true_square() {
+        for (size, y0, y1) in [
+            (vec2(1280.0, 720.0), 0.0, 1.0),    // 16:9 (maxresdefault)
+            (vec2(640.0, 480.0), 0.125, 0.875), // 4:3 with bars (sddefault)
+            (vec2(480.0, 360.0), 0.125, 0.875), // 4:3 with bars (hqdefault)
+            (vec2(320.0, 180.0), 0.0, 1.0),     // 16:9 (mqdefault)
+        ] {
+            let uv = video_square_uv(size);
+            assert_eq!((uv.min.y, uv.max.y), (y0, y1), "{size:?}");
+            let (w_px, h_px) = (uv.width() * size.x, uv.height() * size.y);
+            assert!(
+                (w_px - h_px).abs() < 0.5,
+                "{size:?}: {w_px} x {h_px} is not square"
+            );
+            assert!(
+                (uv.center().x - 0.5).abs() < 1e-6,
+                "{size:?}: centred horizontally"
+            );
+        }
+        // an unknown size shows the whole picture instead of dividing by zero
+        let all = video_square_uv(vec2(0.0, 0.0));
+        assert_eq!((all.width(), all.height()), (1.0, 1.0));
+        assert_eq!(video_square_uv(vec2(100.0, 0.0)).width(), 1.0);
+        // a (nearly) square texture never asks for more than its width
+        let sq = video_square_uv(vec2(100.0, 100.0));
+        assert!(sq.min.x >= 0.0 && sq.max.x <= 1.0);
+    }
 
     #[test]
     fn drop_gap_snaps_to_the_nearest_line_between_rows() {

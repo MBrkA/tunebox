@@ -9,11 +9,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use ytm_api::{
     AlbumPage, ArtistPage, CategoryPage, ChartsPage, HomePage, Lyrics, MoodsPage, PlaylistPage,
-    SearchFilter, SearchItem, Track,
+    SearchFilter, SearchItem, Section, Track,
 };
 use ytm_player::{Command, Player, PlayerState};
 
 use crate::backend::{Action, Event};
+use crate::history::{History, Period, Play, PlayTimer};
 use crate::local::{is_local_id, LocalLibrary};
 
 const SUGGEST_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -34,6 +35,8 @@ pub enum Route {
     Mood(String),
     Library,
     Playlists,
+    /// Listening history and stats.
+    History,
     Settings,
     Search,
     Album(String),
@@ -110,7 +113,22 @@ pub enum UiAction {
     ImportPlaylist,
     /// Shuffle-play these tracks from a random starting point.
     ShufflePlay(Vec<Track>),
+    /// Forget the whole listening history.
+    ClearHistory,
 }
+
+/// "More like this" for one seed track, shown on Home.
+#[derive(Debug, Clone)]
+pub struct Recommendation {
+    pub seed: Track,
+    pub tracks: Vec<Track>,
+}
+
+/// How many songs one "More like …" shelf shows, and the fewest worth showing.
+const REC_TRACKS: usize = 20;
+const REC_MIN: usize = 4;
+/// How many seeds Home asks recommendations for.
+const REC_SEEDS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LibraryTab {
@@ -216,6 +234,19 @@ pub struct AppState {
     pub playlists: HashMap<String, Load<PlaylistPage>>,
     pub playlist_more_loading: bool,
     pub lyrics: LyricsState,
+    /// What has been listened to on this device (see `history.rs`).
+    pub listening: History,
+    play_timer: PlayTimer,
+    pub stats_period: Period,
+    /// Radio shelves for Home, seeded from what the user plays or likes most.
+    pub recs: Vec<Recommendation>,
+    rec_seeds: Vec<String>,
+    recs_requested: bool,
+    /// Home's personal shelves (recently played, recommendations); rebuilt only when
+    /// their inputs change, so drawing a frame never copies the lists.
+    pub personal: Arc<Vec<Section>>,
+    /// The rest of the recommendation shelves, shown after YouTube's first shelf.
+    pub personal_late: Arc<Vec<Section>>,
     pub library_tab: LibraryTab,
     /// Bumped whenever data shown in context menus changes.
     pub menu_version: u64,
@@ -234,6 +265,10 @@ pub struct AppState {
     /// The folder with all app data (settings, library, playlists, covers). Tests point it at a temp
     /// folder so they never touch the real settings.
     pub data_dir: std::path::PathBuf,
+    /// How often each page was opened fresh (sidebar, shortcut). It is part of the page's id, so a
+    /// fresh visit gets new scroll areas and starts at the top; Back keeps the old epoch and with it
+    /// the old position.
+    page_epochs: HashMap<Route, u64>,
     /// When each listing page was last fetched, for the refresh interval.
     fetched: HashMap<Route, Instant>,
     /// The open local playlist is in edit mode.
@@ -273,6 +308,14 @@ impl AppState {
             playlists: HashMap::new(),
             playlist_more_loading: false,
             lyrics: LyricsState::default(),
+            listening: History::default(),
+            play_timer: PlayTimer::default(),
+            stats_period: Period::default(),
+            recs: Vec::new(),
+            rec_seeds: Vec::new(),
+            recs_requested: false,
+            personal: Arc::new(Vec::new()),
+            personal_late: Arc::new(Vec::new()),
             library_tab: LibraryTab::Songs,
             menu_version: 0,
             new_playlist: None,
@@ -283,6 +326,7 @@ impl AppState {
             tray_at_start: ytm_core::Config::default().tray_icon,
             close_to_tray_at_start: ytm_core::Config::default().close_to_tray,
             data_dir: ytm_core::Config::data_dir().unwrap_or_default(),
+            page_epochs: HashMap::new(),
             fetched: HashMap::new(),
             playlist_edit: false,
             local: LocalLibrary::default(),
@@ -310,6 +354,12 @@ impl AppState {
         self.config.tray_icon != self.tray_at_start
             || (cfg!(target_os = "linux")
                 && self.config.close_to_tray != self.close_to_tray_at_start)
+    }
+
+    pub fn with_history(mut self, history: History) -> Self {
+        self.listening = history;
+        self.rebuild_personal();
+        self
     }
 
     pub fn with_local(mut self, local: LocalLibrary) -> Self {
@@ -386,13 +436,143 @@ impl AppState {
                 self.toast = None;
             }
         }
+        let playing = self.ps.status == ytm_player::Status::Playing;
+        let track = self.ps.current_track().cloned();
+        self.count_listening(Instant::now(), track.as_ref(), playing);
         if let Some(msg) = &self.ps.error {
             // Playback errors are also toasted via events; keep the banner in the player bar only.
             let _ = msg;
         }
     }
 
+    // ---- listening history ----------------------------------------------
+
+    /// Feeds the play timer; a track that has been heard long enough is written to the history.
+    pub fn count_listening(&mut self, now: Instant, track: Option<&Track>, playing: bool) {
+        let counted = self.play_timer.tick(now, track, playing);
+        if !self.config.record_history {
+            return;
+        }
+        if let Some(track) = counted {
+            let play = Play {
+                t: crate::history::now_secs(),
+                secs: track.duration_secs.unwrap_or(0),
+                track,
+            };
+            if let Some(line) = self.listening.record(play) {
+                self.send(Action::AppendHistory(line));
+            }
+            self.rebuild_personal();
+        }
+    }
+
+    /// "Keep listening history" was switched: the Home shelves follow it.
+    pub fn history_setting_changed(&mut self) {
+        self.rebuild_personal();
+    }
+
+    fn clear_history(&mut self) {
+        self.listening.clear();
+        self.send(Action::ClearHistory);
+        self.recs.clear();
+        self.rec_seeds.clear();
+        self.recs_requested = false;
+        self.rebuild_personal();
+        self.ensure_recs();
+    }
+
+    /// Tracks to seed Home's "More like …" shelves: picked at random among the five most-played of
+    /// the last month (so Home is not the same every day), one per artist; the latest likes when
+    /// there is no history yet.
+    fn pick_rec_seeds(&self) -> Vec<Track> {
+        let mut pool: Vec<Track> = if self.config.record_history && !self.listening.is_empty() {
+            self.listening
+                .stats(Period::Month, crate::history::now_secs(), 5)
+                .top_tracks
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect()
+        } else {
+            self.local.liked.iter().take(5).cloned().collect()
+        };
+        fastrand::shuffle(&mut pool);
+        let mut artists = std::collections::HashSet::new();
+        pool.into_iter()
+            .filter(|t| artists.insert(t.artists.first().map(|a| a.name.clone())))
+            .take(REC_SEEDS)
+            .collect()
+    }
+
+    /// Asks for Home's recommendations once per session (and again after the history is cleared).
+    fn ensure_recs(&mut self) {
+        if self.recs_requested {
+            return;
+        }
+        let seeds = self.pick_rec_seeds();
+        if seeds.is_empty() {
+            return;
+        }
+        self.recs_requested = true;
+        self.rec_seeds = seeds.iter().map(|t| t.video_id.clone()).collect();
+        self.send(Action::LoadRecommendations(seeds));
+    }
+
+    /// Home's own shelves: "Recently played" and the first "More like …" go above YouTube's shelves,
+    /// the next "More like …" shelves go after YouTube's first one so Home stays mixed. A song is
+    /// shown once: shelves skip what "Recently played" or an earlier shelf already has, and a shelf
+    /// left with too few songs is dropped.
+    fn rebuild_personal(&mut self) {
+        let recent = if self.config.record_history {
+            self.listening.recent_tracks(12)
+        } else {
+            Vec::new()
+        };
+        let mut seen: std::collections::HashSet<String> =
+            recent.iter().map(|t| t.video_id.clone()).collect();
+        let mut head = Vec::new();
+        if !recent.is_empty() {
+            head.push(Section {
+                title: crate::i18n::t("Recently played").into(),
+                items: recent.into_iter().map(SearchItem::Track).collect(),
+            });
+        }
+        let mut late = Vec::new();
+        let mut first = true;
+        for r in &self.recs {
+            let fresh: Vec<&Track> = r
+                .tracks
+                .iter()
+                .filter(|t| !seen.contains(&t.video_id))
+                .collect();
+            if fresh.len() < REC_MIN {
+                continue;
+            }
+            seen.extend(fresh.iter().map(|t| t.video_id.clone()));
+            let shelf = Section {
+                title: crate::i18n::t("More like {}").replace("{}", &r.seed.title),
+                items: fresh.into_iter().cloned().map(SearchItem::Track).collect(),
+            };
+            if std::mem::take(&mut first) {
+                head.push(shelf);
+            } else {
+                late.push(shelf);
+            }
+        }
+        self.personal = Arc::new(head);
+        self.personal_late = Arc::new(late);
+    }
+
     // ---- navigation -----------------------------------------------------
+
+    /// Opens a page the way the sidebar does: at the top, even when it is the page already open.
+    pub fn navigate_fresh(&mut self, route: Route) {
+        *self.page_epochs.entry(route.clone()).or_default() += 1;
+        self.navigate(route);
+    }
+
+    pub fn page_epoch(&self, route: &Route) -> u64 {
+        self.page_epochs.get(route).copied().unwrap_or(0)
+    }
 
     pub fn navigate(&mut self, route: Route) {
         if self.route != route {
@@ -435,6 +615,9 @@ impl AppState {
 
     /// Starts loading whatever the current route needs (no-op if loaded/loading).
     pub fn ensure_loaded(&mut self) {
+        if self.route == Route::Home {
+            self.ensure_recs();
+        }
         match self.route.clone() {
             Route::Home if self.home.is_idle_or_failed() => {
                 self.home = Load::Loading;
@@ -491,6 +674,8 @@ impl AppState {
 
     /// The UI language changed: YouTube's own text (moods, titles, …) must be fetched again in it.
     pub fn language_changed(&mut self, hl: &str) {
+        // Home's own shelves carry translated titles from when they were built
+        self.rebuild_personal();
         self.send(Action::SetLanguage(hl.to_owned()));
         self.refetch_everything();
     }
@@ -566,8 +751,16 @@ impl AppState {
                 video_id: id.clone(),
                 load: Load::Loading,
             };
-            self.send(Action::LoadLyrics(id));
+            let synced = self.config.synced_lyrics;
+            if let Some(track) = self.ps.current_track().cloned() {
+                self.send(Action::LoadLyrics { track, synced });
+            }
         }
+    }
+
+    /// "Synced lyrics" was switched: the current track's lyrics are fetched again.
+    pub fn synced_lyrics_setting_changed(&mut self) {
+        self.lyrics = LyricsState::default();
     }
 
     pub fn is_liked(&self, video_id: &str) -> bool {
@@ -723,7 +916,7 @@ impl AppState {
                     }
                     if let Some(s) = self.pending_restore_settings.take() {
                         s.apply_to(&mut self.config);
-                        let lang = crate::i18n::Lang::from_code(&self.config.ui_language);
+                        let lang = crate::i18n::resolve(&self.config.ui_language);
                         crate::i18n::set(lang);
                         self.config.language = lang.hl().into();
                         if let Err(e) = self.save_config() {
@@ -751,6 +944,10 @@ impl AppState {
             UiAction::Enqueue(ts) => self.playback(Command::Enqueue(ts)),
             UiAction::Go(route) => self.navigate(route),
             UiAction::Radio(id) => self.send(Action::StartRadio(id)),
+            UiAction::ClearHistory => {
+                self.clear_history();
+                self.toast(crate::i18n::t("Listening history cleared").into());
+            }
             UiAction::ShufflePlay(tracks) => {
                 if tracks.is_empty() {
                     return;
@@ -977,6 +1174,24 @@ impl AppState {
             Event::Lyrics { video_id, result } => {
                 if self.lyrics.video_id == video_id {
                     self.lyrics.load = Load::from_result(result);
+                }
+            }
+            Event::Recommendation { seed, result } => {
+                let Ok(tracks) = result else { return };
+                let mut seen = std::collections::HashSet::new();
+                seen.insert(seed.video_id.clone());
+                let tracks: Vec<Track> = tracks
+                    .into_iter()
+                    .filter(|t| seen.insert(t.video_id.clone()))
+                    .take(REC_TRACKS)
+                    .collect();
+                if tracks.len() >= REC_MIN && self.rec_seeds.contains(&seed.video_id) {
+                    self.recs.retain(|r| r.seed.video_id != seed.video_id);
+                    self.recs.push(Recommendation { seed, tracks });
+                    let order = self.rec_seeds.clone();
+                    self.recs
+                        .sort_by_key(|r| order.iter().position(|id| *id == r.seed.video_id));
+                    self.rebuild_personal();
                 }
             }
             Event::PlaylistTracks(lists) => {
@@ -1440,6 +1655,234 @@ mod tests {
             matches!(app.lyrics.load, Load::Idle),
             "unrelated result is ignored"
         );
+    }
+
+    fn by(id: &str, artist: &str) -> Track {
+        Track {
+            artists: vec![ytm_api::ArtistRef {
+                name: artist.into(),
+                id: Some(format!("UC{artist}")),
+            }],
+            duration_secs: Some(120),
+            ..track(id)
+        }
+    }
+
+    /// Listens to `t` for `secs` seconds of (synthetic) frame time.
+    fn listen(app: &mut AppState, t: &Track, secs: u64) {
+        let t0 = Instant::now();
+        for s in 0..=secs {
+            app.count_listening(t0 + Duration::from_secs(s), Some(t), true);
+        }
+        app.count_listening(t0 + Duration::from_secs(secs + 1), None, false);
+    }
+
+    #[tokio::test]
+    async fn a_counted_play_is_saved_and_shown_on_home_and_clear_forgets_it() {
+        let (mut app, mut rx) = state();
+        drain(&mut rx);
+        listen(&mut app, &by("a", "X"), 10);
+        assert!(app.listening.is_empty(), "10 s is not a play");
+        listen(&mut app, &by("a", "X"), 35);
+        assert_eq!(app.listening.plays.len(), 1);
+        let sent = drain(&mut rx);
+        assert!(
+            matches!(sent.as_slice(), [Action::AppendHistory(l)] if l.contains("\"a\"")),
+            "{sent:?}"
+        );
+        assert_eq!(app.personal[0].items.len(), 1, "Recently played shelf");
+
+        app.config.record_history = false;
+        listen(&mut app, &by("b", "X"), 40);
+        assert_eq!(app.listening.plays.len(), 1, "off = nothing recorded");
+        assert!(drain(&mut rx).is_empty());
+
+        app.run(UiAction::ClearHistory);
+        assert!(app.listening.is_empty() && app.personal.is_empty());
+        assert!(drain(&mut rx)
+            .iter()
+            .any(|a| matches!(a, Action::ClearHistory)));
+    }
+
+    #[tokio::test]
+    async fn recommendations_seed_from_top_plays_one_per_artist_and_are_filtered() {
+        let (mut app, mut rx) = state();
+        drain(&mut rx);
+        for (id, artist, n) in [("a", "X", 3), ("b", "X", 2), ("c", "Y", 1)] {
+            for _ in 0..n {
+                listen(&mut app, &by(id, artist), 35);
+            }
+        }
+        drain(&mut rx);
+        app.ensure_loaded(); // Home
+        let sent = drain(&mut rx);
+        let seeds = sent
+            .iter()
+            .find_map(|a| match a {
+                Action::LoadRecommendations(s) => Some(s.clone()),
+                _ => None,
+            })
+            .expect("asked for recommendations");
+        let ids: Vec<_> = seeds.iter().map(|t| t.video_id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert!(ids.contains(&"c"), "{ids:?}");
+        assert!(
+            ids.contains(&"a") || ids.contains(&"b"),
+            "one per artist, picked among the top plays: {ids:?}"
+        );
+        app.ensure_loaded();
+        assert!(
+            !drain(&mut rx)
+                .iter()
+                .any(|a| matches!(a, Action::LoadRecommendations(_))),
+            "once per session"
+        );
+
+        // the seed itself and duplicates are dropped; too few left = no shelf
+        let mut tracks = vec![
+            track(&seeds[0].video_id),
+            track(&seeds[0].video_id),
+            track("n1"),
+            track("n1"),
+            track("n2"),
+        ];
+        app.apply(Event::Recommendation {
+            seed: seeds[0].clone(),
+            result: Ok(tracks.clone()),
+        });
+        assert!(app.recs.is_empty(), "only 2 distinct songs");
+        tracks.extend([track("n3"), track("n4")]);
+        app.apply(Event::Recommendation {
+            seed: seeds[0].clone(),
+            result: Ok(tracks),
+        });
+        assert_eq!(app.recs.len(), 1);
+        assert_eq!(app.recs[0].tracks.len(), 4);
+        assert!(app
+            .personal
+            .iter()
+            .any(|s| s.title.contains(&seeds[0].title) && s.items.len() == 4));
+        // an unrequested seed is ignored
+        app.apply(Event::Recommendation {
+            seed: track("zzz"),
+            result: Ok((0..9).map(|i| track(&format!("q{i}"))).collect()),
+        });
+        assert_eq!(app.recs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn recommendation_shelves_never_repeat_a_song_and_split_around_youtubes_first() {
+        let (mut app, mut rx) = state();
+        drain(&mut rx);
+        listen(&mut app, &by("p1", "X"), 35);
+        listen(&mut app, &by("p2", "Y"), 35);
+        drain(&mut rx);
+        app.ensure_loaded();
+        let seeds = drain(&mut rx)
+            .into_iter()
+            .find_map(|a| match a {
+                Action::LoadRecommendations(s) => Some(s),
+                _ => None,
+            })
+            .unwrap();
+        let ids = |r: std::ops::Range<usize>| -> Vec<Track> {
+            r.map(|i| track(&format!("s{i}"))).collect()
+        };
+        // shelf 1: s0-s5; shelf 2 overlaps it (s3-s5) and one recently played song (p1): only s6-s8
+        // are new, so it has too few songs and is dropped
+        app.apply(Event::Recommendation {
+            seed: seeds[0].clone(),
+            result: Ok(ids(0..6)),
+        });
+        let mut second = ids(3..9);
+        second.push(track("p1"));
+        app.apply(Event::Recommendation {
+            seed: seeds[1].clone(),
+            result: Ok(second),
+        });
+        assert_eq!(app.recs.len(), 2, "both are kept as data");
+        let titles: Vec<_> = app.personal.iter().map(|s| s.title.clone()).collect();
+        assert_eq!(
+            titles.len(),
+            2,
+            "Recently played + the first shelf: {titles:?}"
+        );
+        assert!(
+            app.personal_late.is_empty(),
+            "too few new songs for shelf 2"
+        );
+
+        // more new songs in shelf 2: it appears, in the late group, without the repeats
+        let mut second = ids(3..14);
+        second.push(track("p1"));
+        app.apply(Event::Recommendation {
+            seed: seeds[1].clone(),
+            result: Ok(second),
+        });
+        assert_eq!(app.personal_late.len(), 1);
+        let late: Vec<_> = app.personal_late[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                SearchItem::Track(t) => Some(t.video_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(late.len(), 8, "s6..s13, no s3-s5, no p1: {late:?}");
+        assert!(!late.contains(&"p1".to_owned()) && !late.contains(&"s4".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn home_shelf_titles_follow_a_language_change() {
+        let _lang = crate::i18n::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::i18n::set(crate::i18n::Lang::En);
+        let (mut app, mut rx) = state();
+        drain(&mut rx);
+        listen(&mut app, &by("a", "X"), 35);
+        assert_eq!(app.personal[0].title, "Recently played");
+        crate::i18n::set(crate::i18n::Lang::Tr);
+        app.language_changed("tr");
+        let titles: Vec<_> = app.personal.iter().map(|s| s.title.clone()).collect();
+        crate::i18n::set(crate::i18n::Lang::En);
+        assert_eq!(titles, ["Son çalınanlar"], "rebuilt in the new language");
+    }
+
+    #[tokio::test]
+    async fn likes_seed_recommendations_when_there_is_no_history() {
+        let (mut app, mut rx) = state();
+        app.toggle_like(&by("l1", "X"));
+        drain(&mut rx);
+        app.ensure_loaded();
+        assert!(drain(&mut rx)
+            .iter()
+            .any(|a| matches!(a, Action::LoadRecommendations(s) if s[0].video_id == "l1")));
+    }
+
+    #[tokio::test]
+    async fn sidebar_navigation_is_fresh_for_that_page_only() {
+        let (mut app, _rx) = state();
+        assert_eq!(app.page_epoch(&Route::Home), 0);
+        app.navigate_fresh(Route::Library);
+        assert_eq!(app.route, Route::Library);
+        assert_eq!(app.page_epoch(&Route::Library), 1);
+        assert_eq!(
+            app.page_epoch(&Route::Home),
+            0,
+            "other pages keep their position"
+        );
+        app.navigate_fresh(Route::Library); // clicking the open page again
+        assert_eq!(
+            app.page_epoch(&Route::Library),
+            2,
+            "scrolls it back to the top"
+        );
+        // plain navigation (links, Back) does not reset anything
+        app.navigate(Route::Explore);
+        app.navigate(Route::Library);
+        assert_eq!(app.page_epoch(&Route::Library), 2);
+        assert_eq!(app.page_epoch(&Route::Explore), 0);
     }
 
     #[tokio::test]

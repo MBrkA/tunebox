@@ -5,6 +5,7 @@ pub mod charts;
 pub mod common;
 pub mod dialogs;
 pub mod help;
+pub mod history;
 pub mod library;
 pub mod moods;
 pub mod now_playing;
