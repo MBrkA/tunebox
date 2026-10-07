@@ -185,6 +185,20 @@ impl Queue {
         outcome
     }
 
+    /// Moves an upcoming entry within the "next up" list: `from` and `to` are positions in
+    /// `upcoming()`. Only the play order changes, so it also works while shuffled. Returns
+    /// whether anything moved.
+    pub fn move_upcoming(&mut self, from: usize, to: usize) -> bool {
+        let Some(p) = self.pos else { return false };
+        let n = self.order.len().saturating_sub(p + 1);
+        if from >= n || to >= n || from == to {
+            return false;
+        }
+        let item = self.order.remove(p + 1 + from);
+        self.order.insert(p + 1 + to, item);
+        true
+    }
+
     pub fn clear(&mut self) {
         *self = Self {
             shuffle: self.shuffle,
@@ -324,6 +338,23 @@ mod tests {
         assert!(q.skip_next().is_none());
         q.set_repeat(Repeat::All);
         assert_eq!(q.skip_next().unwrap().title, "t0");
+    }
+
+    #[test]
+    fn move_upcoming_reorders_the_play_order_only() {
+        let mut q = queue(5);
+        // upcoming = [1, 2, 3, 4]
+        assert!(q.move_upcoming(0, 2));
+        assert_eq!(q.upcoming(), vec![2, 3, 1, 4]);
+        assert!(q.move_upcoming(3, 0));
+        assert_eq!(q.upcoming(), vec![4, 2, 3, 1]);
+        assert_eq!(title(&q), "t0", "current track is untouched");
+        assert_eq!(q.tracks().len(), 5);
+        assert!(!q.move_upcoming(1, 1), "same slot is a no-op");
+        assert!(!q.move_upcoming(0, 9), "out of range is a no-op");
+        assert!(!q.move_upcoming(9, 0));
+        assert_eq!(q.advance().unwrap().title, "t4");
+        assert!(!Queue::new().move_upcoming(0, 1));
     }
 
     #[test]

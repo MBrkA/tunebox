@@ -2,6 +2,7 @@
 
 mod app;
 mod backend;
+mod history;
 mod i18n;
 mod layout;
 mod local;
@@ -101,12 +102,12 @@ fn launch(
         renderer,
         ..Default::default()
     };
-    i18n::set(i18n::Lang::from_code(&config.ui_language));
-    let theme_mode = theme::Mode::from_code(&config.theme);
+    i18n::set(i18n::resolve(&config.ui_language));
+    let theme_pref = theme::Pref::from_code(&config.theme);
     let handle = rt.handle().clone();
     let (mut config, dev) = (config.clone(), dev.clone());
     // YouTube's own text follows the interface language.
-    config.language = i18n::Lang::from_code(&config.ui_language).hl().into();
+    config.language = i18n::resolve(&config.ui_language).hl().into();
     eframe::run_native(
         "Tunebox",
         options,
@@ -114,7 +115,7 @@ fn launch(
             let ctx = cc.egui_ctx.clone();
             single::set_context(ctx.clone());
             theme::install(&ctx);
-            theme::set_mode(&ctx, theme_mode);
+            theme::apply_pref(&ctx, theme_pref);
             egui_extras::install_image_loaders(&ctx);
 
             let cache_dir = ytm_core::Config::dirs()
@@ -172,9 +173,14 @@ fn launch(
                 Some(p) => local::LocalLibrary::load(p),
                 None => (local::LocalLibrary::default(), None),
             };
+            let history = match &local_path {
+                Some(p) => history::History::load(&history::file_for(p)),
+                None => history::History::default(),
+            };
             let mut state = AppState::new(player, action_tx)
                 .with_config(config.clone())
-                .with_local(library);
+                .with_local(library)
+                .with_history(history);
             if let Some(w) = warning {
                 state.toast(w);
             }

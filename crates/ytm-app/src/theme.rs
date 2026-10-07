@@ -64,19 +64,39 @@ pub enum Mode {
     Light,
 }
 
-impl Mode {
-    pub fn from_code(code: &str) -> Mode {
-        if code.trim().eq_ignore_ascii_case("light") {
-            Mode::Light
-        } else {
-            Mode::Dark
+/// What the user picked: a fixed palette, or whatever the operating system is using.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pref {
+    System,
+    Light,
+    Dark,
+}
+
+impl Pref {
+    /// Anything that is not `light` or `dark` means follow the system.
+    pub fn from_code(code: &str) -> Pref {
+        match code.trim().to_ascii_lowercase().as_str() {
+            "light" => Pref::Light,
+            "dark" => Pref::Dark,
+            _ => Pref::System,
         }
     }
 
     pub fn code(self) -> &'static str {
         match self {
-            Mode::Dark => "dark",
-            Mode::Light => "light",
+            Pref::System => "system",
+            Pref::Light => "light",
+            Pref::Dark => "dark",
+        }
+    }
+
+    /// The palette to draw with. `os` is the OS theme when known; dark until it is.
+    pub fn resolve(self, os: Option<egui::Theme>) -> Mode {
+        match self {
+            Pref::Light => Mode::Light,
+            Pref::Dark => Mode::Dark,
+            Pref::System if os == Some(egui::Theme::Light) => Mode::Light,
+            Pref::System => Mode::Dark,
         }
     }
 }
@@ -191,6 +211,30 @@ pub fn set_mode(ctx: &egui::Context, mode: Mode) {
         };
     });
     ctx.request_repaint();
+}
+
+/// Applies the user's choice. With `System` egui tracks the OS theme (and the window frame follows
+/// it); [`follow_system`] then restyles the UI whenever the OS changes.
+pub fn apply_pref(ctx: &egui::Context, pref: Pref) {
+    let mode = pref.resolve(ctx.system_theme());
+    LIGHT_MODE.store(mode == Mode::Light, std::sync::atomic::Ordering::Relaxed);
+    ctx.set_visuals_of(egui::Theme::Dark, visuals());
+    ctx.set_visuals_of(egui::Theme::Light, visuals());
+    ctx.options_mut(|o| {
+        o.theme_preference = match pref {
+            Pref::System => egui::ThemePreference::System,
+            Pref::Light => egui::ThemePreference::Light,
+            Pref::Dark => egui::ThemePreference::Dark,
+        };
+    });
+    ctx.request_repaint();
+}
+
+/// Call every frame: with "Follow system", a change of the OS theme switches the palette.
+pub fn follow_system(ctx: &egui::Context, pref: Pref) {
+    if pref == Pref::System && pref.resolve(ctx.system_theme()) != mode() {
+        apply_pref(ctx, pref);
+    }
 }
 
 pub fn fonts() -> FontDefinitions {
@@ -373,6 +417,63 @@ pub fn visuals() -> egui::Visuals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The OS theme reaches egui through a frame's input, as eframe delivers it.
+    fn os_theme(ctx: &egui::Context, theme: egui::Theme) {
+        let input = egui::RawInput {
+            system_theme: Some(theme),
+            ..egui::RawInput::default()
+        };
+        let mut out = ctx.run_ui(input, |_| {});
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn the_theme_choice_resolves_against_the_os() {
+        use egui::Theme::{Dark as OsDark, Light as OsLight};
+        assert_eq!(Pref::from_code("light"), Pref::Light);
+        assert_eq!(Pref::from_code(" DARK "), Pref::Dark);
+        assert_eq!(Pref::from_code("system"), Pref::System);
+        assert_eq!(
+            Pref::from_code(""),
+            Pref::System,
+            "unknown means follow the system"
+        );
+        for p in [Pref::System, Pref::Light, Pref::Dark] {
+            assert_eq!(Pref::from_code(p.code()), p);
+        }
+        assert_eq!(Pref::System.resolve(Some(OsLight)), Mode::Light);
+        assert_eq!(Pref::System.resolve(Some(OsDark)), Mode::Dark);
+        assert_eq!(
+            Pref::System.resolve(None),
+            Mode::Dark,
+            "dark until the OS answers"
+        );
+        assert_eq!(
+            Pref::Dark.resolve(Some(OsLight)),
+            Mode::Dark,
+            "a fixed choice ignores the OS"
+        );
+        assert_eq!(Pref::Light.resolve(Some(OsDark)), Mode::Light);
+    }
+
+    #[test]
+    fn follow_system_restyles_when_the_os_theme_changes() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        os_theme(&ctx, egui::Theme::Light);
+        apply_pref(&ctx, Pref::System);
+        assert_eq!(mode(), Mode::Light);
+        os_theme(&ctx, egui::Theme::Dark);
+        follow_system(&ctx, Pref::System);
+        assert_eq!(mode(), Mode::Dark, "the OS went dark");
+        // a fixed choice is left alone
+        apply_pref(&ctx, Pref::Light);
+        os_theme(&ctx, egui::Theme::Dark);
+        follow_system(&ctx, Pref::Light);
+        assert_eq!(mode(), Mode::Light);
+        apply_pref(&ctx, Pref::Dark);
+    }
 
     #[test]
     fn both_themes_carry_the_custom_text_styles() {

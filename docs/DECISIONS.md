@@ -305,3 +305,75 @@ Tests point `AppState::data_dir` at a temp folder; an earlier test run overwrote
 * Not verified: the Windows build compiles (`cargo zigbuild`), nothing ran on Windows; the macOS-only lines
   (`set_icon_templated`, `set_title`) were checked against the `tray-icon` 0.26 / `muda` sources, and the app has since been
   run on macOS without checking the menu-bar icon specifically.
+
+## D30. Listening history: append-only JSONL, a play counts after 30 s
+* `history.jsonl` sits next to `library.json` (so "Change folder…" copies it) and holds one line per counted play
+  (`{t, secs, track}`), appended by the backend, never rewritten while running; trimmed to the newest 20 000 plays on load.
+  It is separate from `library.json` on purpose: the library snapshot is rewritten on every change and is the backup
+  format; a growing log would make every like or rename rewrite it.
+* A play counts once the track has been heard for 30 s, or half of it when shorter (the scrobbling convention), measured
+  by `PlayTimer` from the frames the UI draws: a gap longer than 1 s between frames (sleep) adds only 1 s, pausing adds
+  nothing, and repeat-one counts again after a full lap. Tested with synthetic `Instant`s. "Listening time" is the sum of
+  the counted tracks' lengths, not wall-clock listening.
+* `Config::record_history` turns recording and the Home shelves off; "Clear history" deletes the file. Nothing leaves the device.
+* Checked live: 30 s of real playback appended one line (real video and artist id) to the file.
+
+## D31. Home recommendations come from the radio of your own top tracks
+* Home order: "Recently played" → first "More like <song>" → YouTube's first shelf → second "More like <song>" → the rest of
+  YouTube's shelves, so Home stays mixed. Resuming what you just played is the main reason to open the app, so it is first.
+  A "Your top artists" shelf was tried and removed: it is a stats view (the History page ranks artists), pushed the useful
+  shelves down, and its cards could only borrow a track's cover art.
+* Seeds are picked at random among the five most-played tracks of the last 30 days, one per artist (the latest likes when
+  there is no history), so Home is not identical every day. Two seeds at most: each is another startup request and more
+  shelves would bury YouTube's. Each seed asks the existing `up_next` (radio) endpoint, once per session (again after
+  clearing the history).
+* No song appears twice on Home: shelves skip what "Recently played" or an earlier shelf has, and a shelf left with fewer
+  than 4 songs is dropped. Titles are translated when the shelves are built, so a language change rebuilds them.
+* The shelves are built into `Arc<Vec<Section>>`s only when their inputs change, so drawing a frame copies nothing.
+
+## D32. Synced lyrics from LRCLIB (new third-party service)
+* YouTube's lyrics are plain text. Timestamps come from LRCLIB (`lrclib.net/api`): free, no key, asks clients to send a
+  User-Agent. Lookup: `/get` with title, artist, album and duration; if that misses, `/search` with the cleaned title
+  (trailing "(Official Video)" etc. removed), taking the entry whose length is within 3 s. A 404 is "no lyrics", other
+  failures are errors; both are swallowed in `Backend` so YouTube's text still shows.
+* It sends the song title, artist, album and length to a third party, so it is a setting (`synced_lyrics`, on by default,
+  with the data it sends spelled out in Settings). The code is in `ytm-api::lrclib` behind a defaulted `MusicApi::synced_lyrics`
+  (mocks need nothing). Parser tested on a real recorded response (`fixtures/lrclib_get.json`) and the request flow
+  against a local fake server.
+* UI: the current line is bright and larger, the list scrolls only when the line changes (manual scrolling is not
+  fought), clicking a line seeks. Checked live: at 0:20 the "♪" gap line, at 0:43 "You don't even have to do too much"
+  (41.2–44.1 s in the data) was the highlighted one.
+
+## D33. Queue drag-to-reorder moves the play order
+* `Queue::move_upcoming(from, to)` reorders positions in the "next up" list (`upcoming()`), i.e. the play order, so it also
+  works while shuffled. The whole row is draggable (a click still plays it); the insertion line and drop maths are the
+  playlist editor's (`widgets::drop_gap/drop_target`), and the move is sent only on release. Escape cancels.
+* An unshuffled session is saved in play order (`session::save_order`), so the reordered queue survives a restart.
+
+## D34. First-run language and theme follow the operating system
+* `Config` defaults are `ui_language = "system"` and `theme = "system"`. A new install uses the OS language when the app has it
+  (first match among the OS's preferred languages for en/tr/de/es/fr/zh, via `sys-locale`; English otherwise) and the OS
+  light/dark setting. Existing config files keep what they saved ("en", "dark", …); only a missing field gets the new default.
+* Theme: with "System" egui's `ThemePreference::System` is used (a forced Dark/Light would make winit report that theme back,
+  so the OS could never be read again), and `theme::follow_system` runs every frame to restyle when the OS changes. Both egui
+  themes carry the same visuals built from the active palette, so `apply_pref` rewrites them when the palette flips.
+* Settings: theme has System / Light / Dark; the language list starts with "System default (<language>)".
+* Backups carry the setting ("system" is accepted when restoring).
+
+## D35. Sidebar and shortcut navigation start a page at the top
+* Scroll offsets are kept per page id. Opening a page from the sidebar (or Cmd+1…4, Cmd+,) bumps that page's *epoch*, which is
+  part of its id, so it gets new scroll areas and carousels at the top, also when it is the page already open. Back and
+  in-page links keep the epoch, so they restore the old position like a browser. Other pages are not touched.
+
+## D36. The tray icon and close-to-tray are off by default
+* Both are opt-in (`tray_icon = false`, `close_to_tray = false`): a fresh install shows no tray or menu-bar icon and closing
+  the window quits. They need the right desktop support (a StatusNotifierHost on GNOME, D28 on Wayland) and the macOS
+  menu-bar icon has not been checked by hand, so the safe default is not to depend on them. Existing config files keep
+  the value they saved; Settings > Desktop switches them on (applies at the next start).
+* Settings > Desktop: "Show the song next to the tray icon" and "Closing the window keeps Tunebox running in the tray" only
+  mean something with a tray icon, so while "Show tray icon" is off they are greyed out, ignore clicks and say why
+  (`toggle_row_if` uses `ui.add_enabled_ui`). They are also switched *off*, not just greyed out: `Config::normalize` turns
+  `close_to_tray` and `tray_label` off whenever `tray_icon` is off, when the config is loaded and when the tray switch is
+  turned off, so a saved "on" can never apply to a tray that is not there (a greyed-out ON switch was misleading).
+  Switching the tray back on leaves them off; the user turns them on again. Tested with real egui pointer frames (the same
+  click toggles an enabled switch and does nothing to a disabled one) and a config test for the normalisation.

@@ -18,6 +18,7 @@ pub fn home(ui: &mut Ui, app: &mut AppState) {
             salt: "home",
             title: None,
             quick_links: false,
+            personal: true,
             empty: (
                 crate::i18n::t("Welcome to Tunebox"),
                 crate::i18n::t("Nothing to show yet."),
@@ -36,6 +37,7 @@ pub fn explore(ui: &mut Ui, app: &mut AppState) {
             salt: "explore",
             title: None,
             quick_links: true,
+            personal: false,
             empty: (
                 crate::i18n::t("Explore"),
                 crate::i18n::t("Nothing to show yet."),
@@ -54,6 +56,7 @@ pub fn new_releases(ui: &mut Ui, app: &mut AppState) {
             salt: "new_releases",
             title: Some(crate::i18n::t("New releases")),
             quick_links: false,
+            personal: false,
             empty: (
                 crate::i18n::t("New releases"),
                 crate::i18n::t("Nothing to show yet."),
@@ -69,6 +72,8 @@ struct Page {
     title: Option<&'static str>,
     /// "New releases / Charts / Moods & genres" tiles at the top (Explore).
     quick_links: bool,
+    /// Shelves built from this device's history and likes go above YouTube's (Home).
+    personal: bool,
     empty: (&'static str, &'static str),
 }
 
@@ -111,6 +116,7 @@ fn show(ui: &mut Ui, app: &mut AppState, load: &Load<ytm_api::HomePage>, page: P
         salt,
         title,
         quick_links: with_quick_links,
+        personal,
         empty: (empty_title, empty_body),
     } = page;
     match load {
@@ -144,7 +150,23 @@ fn show(ui: &mut Ui, app: &mut AppState, load: &Load<ytm_api::HomePage>, page: P
                     if !page.moods.is_empty() {
                         mood_section(ui, &page.moods, &mut out);
                     }
-                    common::sections(ui, salt, &page.sections, &mut out);
+                    if personal && !app.personal.is_empty() {
+                        common::sections(ui, "home_personal", &app.personal, &mut out);
+                    }
+                    // "More like …" shelves after the first one slot in after YouTube's first shelf
+                    let late = if personal {
+                        app.personal_late.clone()
+                    } else {
+                        Default::default()
+                    };
+                    let split = if late.is_empty() {
+                        page.sections.len()
+                    } else {
+                        1.min(page.sections.len())
+                    };
+                    common::sections(ui, salt, &page.sections[..split], &mut out);
+                    common::sections(ui, "home_late", &late, &mut out);
+                    common::sections(ui, "home_rest", &page.sections[split..], &mut out);
                     ui.add_space(24.0);
                 });
             for a in out {

@@ -19,6 +19,7 @@ pub struct InnerTube {
     base: String,
     hl: Mutex<String>,
     visitor: Mutex<Option<String>>,
+    lrclib: String,
 }
 
 impl InnerTube {
@@ -32,6 +33,7 @@ impl InnerTube {
             base: BASE.to_owned(),
             hl: Mutex::new(hl.into()),
             visitor: Mutex::new(None),
+            lrclib: crate::lrclib::BASE.to_owned(),
         })
     }
 
@@ -39,6 +41,31 @@ impl InnerTube {
     pub fn with_base_url(mut self, base: impl Into<String>) -> Self {
         self.base = base.into();
         self
+    }
+
+    /// Points the synced-lyrics lookups at a different LRCLIB base URL (tests).
+    pub fn with_lrclib_url(mut self, base: impl Into<String>) -> Self {
+        self.lrclib = base.into();
+        self
+    }
+
+    /// GET on LRCLIB; a 404 ("no such song") is `None`, other failures are errors.
+    async fn lrclib_get(
+        &self,
+        path: &str,
+        query: &[(&'static str, String)],
+    ) -> Result<Option<Value>> {
+        let resp = self
+            .http
+            .get(format!("{}/{path}", self.lrclib))
+            .header("User-Agent", crate::lrclib::USER_AGENT)
+            .query(query)
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(resp.error_for_status()?.json().await?))
     }
 
     pub fn from_config(cfg: &ytm_core::Config) -> Result<Self> {
@@ -281,6 +308,33 @@ impl MusicApi for InnerTube {
             .post("browse", json!({"browseId": browse_id}), &[])
             .await?;
         Ok(pages::parse_lyrics(&resp))
+    }
+
+    async fn synced_lyrics(&self, track: &Track) -> Result<Option<Lyrics>> {
+        use crate::lrclib::{parse_record, pick_search_result, query_for};
+        let Some(mut query) = query_for(track, false) else {
+            return Ok(None);
+        };
+        if let Some(d) = track.duration_secs {
+            query.push(("duration", d.to_string()));
+        }
+        // Exact lookup first (title as YouTube spells it), then a search with the cleaned title.
+        if let Some(rec) = self.lrclib_get("get", &query).await? {
+            if let Some(l) = parse_record(&rec).filter(|l| !l.synced.is_empty()) {
+                return Ok(Some(l));
+            }
+        }
+        let Some(query) = query_for(track, true) else {
+            return Ok(None);
+        };
+        let query: Vec<_> = query
+            .into_iter()
+            .filter(|(k, _)| *k != "album_name")
+            .collect();
+        let Some(results) = self.lrclib_get("search", &query).await? else {
+            return Ok(None);
+        };
+        Ok(pick_search_result(&results, track.duration_secs).and_then(parse_record))
     }
 
     async fn search_suggestions(&self, query: &str) -> Result<Vec<String>> {

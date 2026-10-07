@@ -123,9 +123,17 @@ impl TuneboxApp {
 
     fn session_snapshot(&self) -> crate::session::Session {
         let ps = &self.state.ps;
+        let (tracks, current) = match ps.current {
+            // a shuffled queue is reshuffled on restore, so only the unshuffled order is worth keeping
+            Some(cur) if !ps.shuffle => {
+                let (order, at) = crate::session::save_order(ps.tracks.len(), cur, &ps.upcoming);
+                (order.iter().map(|&i| ps.tracks[i].clone()).collect(), at)
+            }
+            cur => (ps.tracks.as_ref().clone(), cur.unwrap_or(0)),
+        };
         crate::session::Session {
-            tracks: ps.tracks.as_ref().clone(),
-            current: ps.current.unwrap_or(0),
+            tracks,
+            current,
             position_ms: self.state.player.position().as_millis() as u64,
             shuffle: ps.shuffle,
             repeat: crate::session::repeat_code(ps.repeat),
@@ -182,6 +190,7 @@ impl TuneboxApp {
                     _ if r == "explore" => Route::Explore,
                     _ if r == "library" => Route::Library,
                     _ if r == "playlists" => Route::Playlists,
+                    _ if r == "history" => Route::History,
                     _ if r == "settings" => Route::Settings,
                     _ => Route::Home,
                 };
@@ -398,7 +407,7 @@ pub(crate) fn handle_shortcuts(ctx: &egui::Context, st: &mut AppState) {
         ] {
             if i.consume_key(cmd, key) {
                 st.now_playing_open = false;
-                st.navigate(route);
+                st.navigate_fresh(route);
             }
         }
         if typed(i, "/") {
@@ -462,6 +471,7 @@ impl eframe::App for TuneboxApp {
                 },
             );
         }
+        theme::follow_system(&ctx, theme::Pref::from_code(&self.state.config.theme));
         self.shortcuts(&ctx);
         if crate::single::take_show_request() {
             self.tray.mark_shown();
@@ -543,7 +553,11 @@ impl eframe::App for TuneboxApp {
                 .show(ui, |ui| {
                     // Every page gets its own scroll positions: without this, egui sees the same
                     // (unnamed) scroll area on each page and keeps the old offset.
-                    let page = page_id(&self.state.route, self.state.search.seq);
+                    let page = page_id(
+                        &self.state.route,
+                        self.state.search.seq,
+                        self.state.page_epoch(&self.state.route),
+                    );
                     ui.push_id(page, |ui| match self.state.route.clone() {
                         Route::Search => views::search::show(ui, &mut self.state),
                         Route::Home => views::browse::home(ui, &mut self.state),
@@ -559,6 +573,7 @@ impl eframe::App for TuneboxApp {
                         Route::Playlist(id) => views::playlist::show(ui, &mut self.state, &id),
                         Route::Library => views::library::library(ui, &mut self.state),
                         Route::Playlists => views::library::playlists(ui, &mut self.state),
+                        Route::History => views::history::show(ui, &mut self.state),
                         Route::Settings => views::settings::show(ui, &mut self.state),
                     });
                 });
@@ -615,10 +630,11 @@ impl TuneboxApp {
 
 /// Identifies the page being shown, so scroll offsets (and carousel positions) do not carry over
 /// from one page to the next. A new search is a new page; loading *more* results is not.
-fn page_id(route: &Route, search_seq: u64) -> egui::Id {
+fn page_id(route: &Route, search_seq: u64, epoch: u64) -> egui::Id {
     match route {
         Route::Search => egui::Id::new(("page", "search", search_seq)),
-        other => egui::Id::new(("page", other)),
+        // `epoch` changes when the page is opened fresh from the sidebar: back at the top
+        other => egui::Id::new(("page", other, epoch)),
     }
 }
 
@@ -688,10 +704,39 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_visit_starts_at_the_top_but_back_keeps_the_position() {
+        let ctx = egui::Context::default();
+        let home = page_id(&Route::Home, 0, 0);
+        assert_eq!(
+            frame(&ctx, Some(home), Some(400.0)),
+            400.0,
+            "scrolled down on Home"
+        );
+        // go to Explore and come back with Back: same page id, same position
+        let explore = page_id(&Route::Explore, 0, 0);
+        assert_eq!(frame(&ctx, Some(explore), None), 0.0);
+        assert_eq!(frame(&ctx, Some(home), None), 400.0, "Back restores it");
+        // clicking Home in the sidebar bumps its epoch: back at the top, even from Home itself
+        let fresh = page_id(&Route::Home, 0, 1);
+        assert_ne!(home, fresh);
+        assert_eq!(
+            frame(&ctx, Some(fresh), None),
+            0.0,
+            "sidebar starts at the top"
+        );
+        assert_eq!(frame(&ctx, Some(fresh), Some(90.0)), 90.0);
+        assert_eq!(
+            frame(&ctx, Some(fresh), None),
+            90.0,
+            "and it then scrolls normally"
+        );
+    }
+
+    #[test]
     fn every_page_starts_at_the_top() {
         let ctx = egui::Context::default();
-        let genre = page_id(&Route::Mood("chill".into()), 0);
-        let other_genre = page_id(&Route::Mood("jazz".into()), 0);
+        let genre = page_id(&Route::Mood("chill".into()), 0, 0);
+        let other_genre = page_id(&Route::Mood("jazz".into()), 0, 0);
         assert_eq!(
             frame(&ctx, Some(genre), Some(150.0)),
             150.0,
@@ -707,9 +752,9 @@ mod tests {
             0.0,
             "another genre starts at the top"
         );
-        let explore = page_id(&Route::Explore, 0);
+        let explore = page_id(&Route::Explore, 0, 0);
         assert_eq!(frame(&ctx, Some(explore), Some(300.0)), 300.0);
-        let moods = page_id(&Route::Moods, 0);
+        let moods = page_id(&Route::Moods, 0, 0);
         assert_eq!(
             frame(&ctx, Some(moods), None),
             0.0,
@@ -720,16 +765,16 @@ mod tests {
     #[test]
     fn page_ids_distinguish_pages_but_not_loading_more_results() {
         assert_ne!(
-            page_id(&Route::Album("a".into()), 0),
-            page_id(&Route::Album("b".into()), 0)
+            page_id(&Route::Album("a".into()), 0, 0),
+            page_id(&Route::Album("b".into()), 0, 0)
         );
         assert_ne!(
-            page_id(&Route::Charts("US".into()), 0),
-            page_id(&Route::Charts("TR".into()), 0)
+            page_id(&Route::Charts("US".into()), 0, 0),
+            page_id(&Route::Charts("TR".into()), 0, 0)
         );
-        assert_ne!(page_id(&Route::Home, 0), page_id(&Route::Explore, 0));
+        assert_ne!(page_id(&Route::Home, 0, 0), page_id(&Route::Explore, 0, 0));
         // a new search (new sequence number) is a new page; paging through the same results is not
-        assert_ne!(page_id(&Route::Search, 1), page_id(&Route::Search, 2));
-        assert_eq!(page_id(&Route::Search, 5), page_id(&Route::Search, 5));
+        assert_ne!(page_id(&Route::Search, 1, 0), page_id(&Route::Search, 2, 0));
+        assert_eq!(page_id(&Route::Search, 5, 0), page_id(&Route::Search, 5, 0));
     }
 }

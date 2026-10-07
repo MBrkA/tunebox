@@ -431,6 +431,7 @@ pub fn parse_lyrics(resp: &Value) -> Option<Lyrics> {
             .get("footer")
             .map(runs_text)
             .filter(|s| !s.trim().is_empty()),
+        synced: Vec::new(),
     })
 }
 

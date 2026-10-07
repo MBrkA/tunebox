@@ -51,6 +51,17 @@ impl Lang {
         }
     }
 
+    /// `Some` only for a language the app has: "es-ES" and "zh_CN" match, "ja" does not.
+    pub fn from_code_strict(code: &str) -> Option<Lang> {
+        let code = code.trim().to_ascii_lowercase();
+        Lang::ALL.into_iter().find(|l| {
+            code == l.code()
+                || code
+                    .strip_prefix(l.code())
+                    .is_some_and(|r| r.starts_with(['-', '_']))
+        })
+    }
+
     pub fn from_code(code: &str) -> Lang {
         let code = code.trim().to_ascii_lowercase();
         Lang::ALL
@@ -64,7 +75,35 @@ impl Lang {
     }
 }
 
+/// The `ui_language` setting that follows the operating system.
+pub const SYSTEM: &str = "system";
+
+/// The first of the OS's preferred languages that the app has; English when none matches.
+pub fn pick_language(preferred: impl IntoIterator<Item = String>) -> Lang {
+    preferred
+        .into_iter()
+        .find_map(|l| Lang::from_code_strict(&l))
+        .unwrap_or(Lang::En)
+}
+
+pub fn system_lang() -> Lang {
+    pick_language(sys_locale::get_locales())
+}
+
+/// The language a `ui_language` setting stands for (`system` asks the OS).
+pub fn resolve(setting: &str) -> Lang {
+    if setting.trim().eq_ignore_ascii_case(SYSTEM) {
+        system_lang()
+    } else {
+        Lang::from_code(setting)
+    }
+}
+
 static CURRENT: AtomicU8 = AtomicU8::new(0);
+
+/// Tests that change the language (a process-wide setting) or read translated text hold this.
+#[cfg(test)]
+pub static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn set(lang: Lang) {
     CURRENT.store(lang as u8, Ordering::Relaxed);
@@ -255,6 +294,38 @@ const TABLE: &[(&str, [&str; 5])] = &[
     ("Applies the next time Tunebox starts.", ["Tunebox'ın bir sonraki açılışında geçerli olur.", "Gilt ab dem nächsten Start von Tunebox.", "Se aplica la próxima vez que se inicie Tunebox.", "S’applique au prochain démarrage de Tunebox.", "下次启动 Tunebox 时生效。"]),
     ("Only works while the tray icon is showing.", ["Yalnızca tepsi simgesi görünürken çalışır.", "Funktioniert nur, solange das Tray-Symbol angezeigt wird.", "Solo funciona mientras se muestre el icono de la bandeja.", "Ne fonctionne que si l’icône est affichée.", "仅在托盘图标显示时有效。"]),
     ("Quit", ["Çık", "Beenden", "Salir", "Quitter", "退出"]),
+    ("Recently played", ["Son çalınanlar", "Zuletzt gespielt", "Reproducido recientemente", "Écoutés récemment", "最近播放"]),
+    ("More like {}", ["{} gibi daha fazlası", "Mehr wie {}", "Más como {}", "Plus comme {}", "更多类似 {} 的歌曲"]),
+    ("plays", ["dinleme", "Wiedergaben", "reproducciones", "écoutes", "次播放"]),
+    ("Plays", ["Dinleme", "Wiedergaben", "Reproducciones", "Écoutes", "播放次数"]),
+    ("History", ["Geçmiş", "Verlauf", "Historial", "Historique", "历史记录"]),
+    ("Clear history", ["Geçmişi temizle", "Verlauf löschen", "Borrar historial", "Effacer l’historique", "清除历史记录"]),
+    ("History is turned off", ["Geçmiş kapalı", "Verlauf ist ausgeschaltet", "El historial está desactivado", "L’historique est désactivé", "历史记录已关闭"]),
+    ("Turn on “Keep listening history” in Settings to see your stats here.", ["İstatistiklerini burada görmek için Ayarlar'dan “Dinleme geçmişini tut” seçeneğini aç.", "Aktiviere in den Einstellungen „Wiedergabeverlauf speichern“, um hier deine Statistiken zu sehen.", "Activa «Guardar historial de reproducción» en Ajustes para ver aquí tus estadísticas.", "Activez « Conserver l’historique d’écoute » dans les réglages pour voir vos statistiques ici.", "在设置中打开“保留收听历史”即可在此查看统计。"]),
+    ("Keep listening history", ["Dinleme geçmişini tut", "Wiedergabeverlauf speichern", "Guardar historial de reproducción", "Conserver l’historique d’écoute", "保留收听历史"]),
+    ("Remembers what you play on this device for Home and the History page.", ["Çaldıklarını bu cihazda Ana sayfa ve Geçmiş sayfası için hatırlar.", "Merkt sich auf diesem Gerät, was du hörst – für Start und Verlauf.", "Recuerda lo que reproduces en este dispositivo para Inicio y el historial.", "Mémorise ce que vous écoutez sur cet appareil pour l’accueil et l’historique.", "在此设备上记住你播放的内容，用于主页和历史记录页面。"]),
+    ("Nothing played yet", ["Henüz bir şey çalınmadı", "Noch nichts gespielt", "Aún no has reproducido nada", "Rien n’a encore été écouté", "还没有播放过任何内容"]),
+    ("Songs you listen to show up here.", ["Dinlediğin şarkılar burada görünür.", "Songs, die du hörst, erscheinen hier.", "Las canciones que escuches aparecerán aquí.", "Les titres que vous écoutez apparaissent ici.", "你听过的歌曲会显示在这里。"]),
+    ("7 days", ["7 gün", "7 Tage", "7 días", "7 jours", "7 天"]),
+    ("30 days", ["30 gün", "30 Tage", "30 días", "30 jours", "30 天"]),
+    ("All time", ["Tüm zamanlar", "Gesamt", "Todo el tiempo", "Depuis toujours", "全部时间"]),
+    ("Top artists", ["En çok dinlenen sanatçılar", "Top-Künstler", "Artistas más escuchados", "Artistes les plus écoutés", "最常听的艺术家"]),
+    ("Delete your whole listening history? This cannot be undone.", ["Tüm dinleme geçmişin silinsin mi? Bu işlem geri alınamaz.", "Gesamten Wiedergabeverlauf löschen? Das lässt sich nicht rückgängig machen.", "¿Borrar todo tu historial de reproducción? No se puede deshacer.", "Supprimer tout votre historique d’écoute ? Cette action est irréversible.", "要删除全部收听历史吗？此操作无法撤销。"]),
+    ("Listening time", ["Dinleme süresi", "Hörzeit", "Tiempo de escucha", "Temps d’écoute", "收听时长"]),
+    ("Different songs", ["Farklı şarkı", "Verschiedene Songs", "Canciones distintas", "Titres différents", "不同的歌曲"]),
+    ("Different artists", ["Farklı sanatçı", "Verschiedene Künstler", "Artistas distintos", "Artistes différents", "不同的艺术家"]),
+    ("14 days ago", ["14 gün önce", "vor 14 Tagen", "hace 14 días", "il y a 14 jours", "14 天前"]),
+    ("Today", ["Bugün", "Heute", "Hoy", "Aujourd’hui", "今天"]),
+    ("Yesterday", ["Dün", "Gestern", "Ayer", "Hier", "昨天"]),
+    ("{} days ago", ["{} gün önce", "vor {} Tagen", "hace {} días", "il y a {} jours", "{} 天前"]),
+    ("min", ["dk", "Min.", "min", "min", "分钟"]),
+    ("h", ["sa", "Std.", "h", "h", "小时"]),
+    ("Listening history cleared", ["Dinleme geçmişi temizlendi", "Wiedergabeverlauf gelöscht", "Historial de reproducción borrado", "Historique d’écoute effacé", "收听历史已清除"]),
+    ("Synced lyrics", ["Senkronize sözler", "Synchronisierte Songtexte", "Letras sincronizadas", "Paroles synchronisées", "同步歌词"]),
+    ("Looks up time-synced lyrics on lrclib.net. Sends the song title, artist, album and length.", ["Zaman senkronlu sözleri lrclib.net'te arar. Şarkı adını, sanatçıyı, albümü ve süreyi gönderir.", "Sucht zeitsynchronisierte Songtexte auf lrclib.net. Sendet Titel, Künstler, Album und Länge.", "Busca letras sincronizadas en lrclib.net. Envía el título, el artista, el álbum y la duración.", "Recherche des paroles synchronisées sur lrclib.net. Envoie le titre, l’artiste, l’album et la durée.", "在 lrclib.net 查找带时间轴的歌词。会发送歌曲标题、艺术家、专辑和时长。"]),
+    ("System", ["Sistem", "System", "Sistema", "Système", "跟随系统"]),
+    ("System default", ["Sistem varsayılanı", "Systemstandard", "Predeterminado del sistema", "Par défaut du système", "系统默认"]),
+    ("Turn on “Show tray icon” to use this.", ["Bunu kullanmak için “Sistem tepsisi simgesini göster” seçeneğini aç.", "Aktiviere „Tray-Symbol anzeigen“, um das zu nutzen.", "Activa «Mostrar icono de bandeja» para usar esto.", "Activez « Afficher l’icône de la zone de notification » pour l’utiliser.", "请先打开“显示托盘图标”才能使用。"]),
 ];
 
 #[cfg(test)]
@@ -263,6 +334,7 @@ mod tests {
 
     #[test]
     fn english_is_identity_and_unknown_falls_back() {
+        let _lang = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set(Lang::En);
         assert_eq!(t("Play"), "Play");
         set(Lang::Tr);
@@ -281,6 +353,29 @@ mod tests {
             assert!(seen.insert(*k), "duplicate key {k}");
             assert!(v.iter().all(|s| !s.is_empty()), "blank translation for {k}");
         }
+    }
+
+    #[test]
+    fn the_os_language_is_used_when_the_app_has_it() {
+        let pick = |l: &[&str]| pick_language(l.iter().map(|s| s.to_string()));
+        assert_eq!(pick(&["tr-TR", "en-US"]), Lang::Tr);
+        assert_eq!(
+            pick(&["ja-JP", "de_DE"]),
+            Lang::De,
+            "skips languages we do not have"
+        );
+        assert_eq!(pick(&["zh-Hans-CN"]), Lang::Zh);
+        assert_eq!(pick(&["ja-JP", "ko"]), Lang::En, "nothing matches: English");
+        assert_eq!(pick(&[]), Lang::En);
+        assert_eq!(
+            Lang::from_code_strict("fil"),
+            None,
+            "a longer code is not a prefix match"
+        );
+        assert_eq!(Lang::from_code_strict("FR"), Some(Lang::Fr));
+        // a fixed setting never asks the OS
+        assert_eq!(resolve("de"), Lang::De);
+        assert_eq!(resolve("nonsense"), Lang::En);
     }
 
     #[test]

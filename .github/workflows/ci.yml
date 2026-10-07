@@ -70,7 +70,28 @@ jobs:
             libxcb-shape0-dev libxcb-xfixes0-dev libgtk-3-dev
       - run: cargo install cargo-packager --locked
       - run: cargo build --release -p ytm-app
-      - run: cargo packager --release --formats ${{ matrix.formats }}
+      # macOS signing + notarisation only happens when the repository has the Apple secrets (see
+      # .claude/skills/tunebox-release); without them (forks, PRs) the build stays unsigned as before.
+      # cargo-packager reads APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD (a base64 Developer ID Application
+      # .p12) and APPLE_ID / APPLE_PASSWORD (app-specific password) / APPLE_TEAM_ID for notarytool.
+      - name: Are the Apple signing secrets set?
+        id: apple
+        shell: bash
+        run: echo "signed=${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE != '' }}" >> "$GITHUB_OUTPUT"
+      - name: Package (signed and notarised)
+        if: steps.apple.outputs.signed == 'true'
+        run: cargo packager --release --formats ${{ matrix.formats }} --config "{\"macos\":{\"signingIdentity\":\"$APPLE_SIGNING_IDENTITY\"}}"
+        working-directory: crates/ytm-app
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Package
+        if: steps.apple.outputs.signed != 'true'
+        run: cargo packager --release --formats ${{ matrix.formats }}
         working-directory: crates/ytm-app
       - uses: actions/upload-artifact@v4
         with:

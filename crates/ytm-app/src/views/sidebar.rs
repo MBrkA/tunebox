@@ -98,6 +98,11 @@ pub fn show(ui: &mut Ui, app: &mut AppState, compact: bool) {
             icon::PLAYLIST,
             crate::i18n::t("Playlists"),
         ),
+        (
+            Route::History,
+            icon::CLOCK_COUNTER_CLOCKWISE,
+            crate::i18n::t("History"),
+        ),
     ];
     for (route, glyph, label) in items {
         // Moods & genres are part of Explore.
@@ -108,7 +113,7 @@ pub fn show(ui: &mut Ui, app: &mut AppState, compact: bool) {
                     Route::Moods | Route::Mood(_) | Route::NewReleases | Route::Charts(_)
                 ));
         if nav_item(ui, glyph, label, selected, compact).clicked() {
-            app.navigate(route);
+            app.navigate_fresh(route);
         }
     }
 }

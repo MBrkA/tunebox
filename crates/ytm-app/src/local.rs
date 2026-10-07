@@ -703,7 +703,7 @@ pub fn parse_backup_file(text: &str) -> Result<(LocalLibrary, Option<BackupSetti
     let settings = serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .and_then(|v| serde_json::from_value::<BackupSettings>(v.get("settings")?.clone()).ok())
-        .filter(|s| matches!(s.theme.as_str(), "dark" | "light"));
+        .filter(|s| matches!(s.theme.as_str(), "dark" | "light" | "system"));
     Ok((lib, settings))
 }
 
