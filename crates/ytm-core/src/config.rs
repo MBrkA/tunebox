@@ -27,9 +27,10 @@ pub struct Config {
     pub volume: f32,
     /// Content language (`hl`) sent to InnerTube.
     pub language: String,
-    /// App (chrome) language: en, tr, de, es or fr. Independent of the content language above.
+    /// App (chrome) language: `system` (follow the OS, the default) or en, tr, de, es, fr, zh.
+    /// Independent of the content language above.
     pub ui_language: String,
-    /// `dark` or `light`.
+    /// `system` (follow the OS, the default), `dark` or `light`.
     pub theme: String,
     /// Refetch Home / Explore / … when opened after this many minutes; 0 = only once per session.
     pub refresh_minutes: u32,
@@ -55,6 +56,10 @@ pub struct Config {
     pub notifications: bool,
     /// Continue where the last session left off (queue, track, position), paused.
     pub restore_session: bool,
+    /// Keep a local listening history (Home shelves, the History page). Stays on this device.
+    pub record_history: bool,
+    /// Look up time-synced lyrics on lrclib.net (sends title, artist, album and length there).
+    pub synced_lyrics: bool,
 }
 
 impl Default for Config {
@@ -62,18 +67,20 @@ impl Default for Config {
         Self {
             volume: 0.8,
             language: "en".into(),
-            ui_language: "en".into(),
-            theme: "dark".into(),
+            ui_language: "system".into(),
+            theme: "system".into(),
             refresh_minutes: 30,
             library_path: None,
             thumbnail_cache_mb: 256,
             preferred_itags: vec![140, 139],
             ytdlp_path: None,
-            tray_icon: true,
+            tray_icon: false,
             close_to_tray: false,
             tray_label: false,
             notifications: true,
             restore_session: true,
+            record_history: true,
+            synced_lyrics: true,
         }
     }
 }
@@ -107,12 +114,25 @@ impl Config {
     /// Loads the config at `path`, returning defaults if it does not exist.
     pub fn load_from(path: &Path) -> Result<Self, ConfigError> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Ok(toml::from_str(&text)?),
+            Ok(text) => {
+                let mut cfg: Self = toml::from_str(&text)?;
+                cfg.normalize();
+                Ok(cfg)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(source) => Err(ConfigError::Io {
                 path: path.into(),
                 source,
             }),
+        }
+    }
+
+    /// Switches off what only works with a tray icon when there is none (the song label next to
+    /// the icon, closing to the tray), so a saved "on" can never apply to a tray that is not there.
+    pub fn normalize(&mut self) {
+        if !self.tray_icon {
+            self.close_to_tray = false;
+            self.tray_label = false;
         }
     }
 
@@ -211,6 +231,50 @@ mod tests {
         assert!(!toml::to_string_pretty(&cfg)
             .unwrap()
             .contains("library_path"));
+    }
+
+    #[test]
+    fn language_and_theme_follow_the_system_by_default() {
+        let cfg = Config::default();
+        assert_eq!(
+            (cfg.ui_language.as_str(), cfg.theme.as_str()),
+            ("system", "system")
+        );
+        // the tray is opt-in: no icon, and closing the window quits
+        assert!(!cfg.tray_icon && !cfg.close_to_tray);
+        // a config written by an older version keeps what it chose
+        let old: Config = toml::from_str("ui_language = \"tr\"\ntheme = \"dark\"\n").unwrap();
+        assert_eq!(
+            (old.ui_language.as_str(), old.theme.as_str()),
+            ("tr", "dark")
+        );
+    }
+
+    #[test]
+    fn options_that_need_the_tray_are_off_when_the_tray_is_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // an older file: tray off, but close-to-tray and the label still saved as on
+        std::fs::write(
+            &path,
+            "tray_icon = false\nclose_to_tray = true\ntray_label = true\n",
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        assert!(!cfg.tray_icon && !cfg.close_to_tray && !cfg.tray_label);
+        // with the tray on they are kept
+        std::fs::write(
+            &path,
+            "tray_icon = true\nclose_to_tray = true\ntray_label = true\n",
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        assert!(cfg.tray_icon && cfg.close_to_tray && cfg.tray_label);
+        // and switching the tray off in the settings page runs the same rule
+        let mut cfg = cfg;
+        cfg.tray_icon = false;
+        cfg.normalize();
+        assert!(!cfg.close_to_tray && !cfg.tray_label);
     }
 
     #[test]
