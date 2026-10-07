@@ -250,4 +250,24 @@ pub struct UpNext {
 pub struct Lyrics {
     pub text: String,
     pub source: Option<String>,
+    /// Lines with their start time, when a synced source had them (empty = plain text only).
+    #[serde(default)]
+    pub synced: Vec<LyricLine>,
+}
+
+/// One line of time-synced lyrics.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LyricLine {
+    pub time_ms: u64,
+    /// Empty for an instrumental gap.
+    pub text: String,
+}
+
+impl Lyrics {
+    /// Index of the line being sung at `position_ms`, if the first line has started.
+    pub fn current_line(&self, position_ms: u64) -> Option<usize> {
+        self.synced
+            .partition_point(|l| l.time_ms <= position_ms)
+            .checked_sub(1)
+    }
 }

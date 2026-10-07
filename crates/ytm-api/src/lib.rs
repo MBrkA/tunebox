@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod error;
+pub mod lrclib;
 pub mod models;
 pub mod nav;
 pub mod pages;
@@ -47,6 +48,12 @@ pub trait MusicApi: Send + Sync {
     fn set_language(&self, _hl: &str) {}
     /// `None` when the track has no lyrics.
     async fn lyrics(&self, video_id: &str) -> Result<Option<Lyrics>>;
+    /// Time-synced lyrics for `track` from LRCLIB; `None` when there are none. Sends the title,
+    /// artist, album and length to that service, so callers ask only when the user allows it.
+    async fn synced_lyrics(&self, track: &Track) -> Result<Option<Lyrics>> {
+        let _ = track;
+        Ok(None)
+    }
 }
 
 /// Turns a video id into a fetchable audio stream.
