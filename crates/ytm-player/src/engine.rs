@@ -83,6 +83,11 @@ pub enum Command {
     Enqueue(Vec<Track>),
     PlayNext(Track),
     Remove(usize),
+    /// Reorder the "next up" list: positions within `Queue::upcoming()`.
+    MoveUpcoming {
+        from: usize,
+        to: usize,
+    },
     Clear,
     /// Play the queue entry at this track index.
     Jump(usize),
@@ -514,6 +519,11 @@ impl Engine {
                 RemoveOutcome::Other => self.queue_changed(),
                 RemoveOutcome::OutOfRange => {}
             },
+            Command::MoveUpcoming { from, to } => {
+                if self.queue.move_upcoming(from, to) {
+                    self.queue_changed();
+                }
+            }
             Command::Clear => {
                 self.queue.clear();
                 self.stop();
