@@ -20,7 +20,7 @@ runtime checks (tray, media keys, notifications): see `tunebox-platform-check`.
 * **Linux `.deb`:** `scripts/package-linux.sh` (needs `cargo install cargo-packager --locked` once and the apt packages in
   `docs/DEVELOPMENT.md`) → `dist/tunebox_<ver>_amd64.deb`, prints `dpkg-deb -I`. Inspect contents with `dpkg-deb -c`.
 * **macOS `.app`/`.dmg`:** `cargo build --release -p ytm-app && cd crates/ytm-app && cargo packager --release --formats app,dmg`
-  → `dist/Tunebox.app`, `dist/Tunebox_<ver>_aarch64.dmg`. Unsigned and un-notarised (Gatekeeper warns). Built on a Mac;
+  → `dist/Tunebox.app`, `dist/Tunebox_<ver>_aarch64.dmg`. Unsigned and un-notarised unless signing is set up (below; Gatekeeper warns otherwise). Built on a Mac;
   launch the `.app` from Finder and check by hand before calling it good.
 * **Windows zip** (cross-compiled from Linux): `scripts/package-windows.sh` → `dist/tunebox-windows-x64.zip` (single
   `tunebox.exe`, ~27 MB, no installer/DLLs). One-time: `rustup target add x86_64-pc-windows-gnu`,
@@ -51,3 +51,14 @@ tray crate, D27).
 State what was and wasn't verified, per OS: what ran, what only compiled (Windows exe, Windows/macOS tray paths via
 `cargo zigbuild --target x86_64-pc-windows-gnu`), and what no human has checked (audible sound, individual macOS features
 such as the menu-bar icon, media keys, notifications). Kill any test instances by PID.
+
+## macOS signing and notarisation (wired in CI, never run yet)
+Needs a paid Apple Developer account. In the repository secrets set: `APPLE_CERTIFICATE` (base64 of the "Developer ID
+Application" `.p12`: `base64 -i cert.p12 | pbcopy`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (e.g.
+`Developer ID Application: Name (TEAMID)`), `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID`.
+The `package` job then signs with the hardened runtime and notarises through `notarytool` (cargo-packager 0.11.8 does
+both when those variables exist); with no secrets it packages unsigned as before. Locally the same works by exporting the
+variables and running `cargo packager --release --formats app,dmg --config '{"macos":{"signingIdentity":"..."}}'`.
+After the first signed build check: `codesign --verify --deep --strict Tunebox.app`, `spctl -a -vv Tunebox.app` and
+`xcrun stapler validate Tunebox_*.dmg`. If notarisation rejects the app, `entitlements` (macOS packager option) is the
+next thing to look at.
