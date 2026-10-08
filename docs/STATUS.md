@@ -20,6 +20,8 @@ MediaRemote media keys / Now Playing widget, the menu-bar icon, that a notificat
 `.app` from Finder. **Signing and notarisation** are wired into CI (`package` job) but have never run: they switch on
 when the repository has the `APPLE_*` secrets (see the `tunebox-release` skill); without them the bundles stay unsigned
 and Gatekeeper warns.
+Until then, distribute the `.pkg` from `scripts/package-macos.sh` (D37), not the `.dmg` (reported as "damaged"
+on other Macs).
 
 **Added later, run on macOS (Apple Silicon) only:** time-synced lyrics (LRCLIB; the highlighted line followed real playback),
 listening history (a play was written after 30 s of real playback), the History page and Home shelves from the history

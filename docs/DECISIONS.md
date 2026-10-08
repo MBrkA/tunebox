@@ -377,3 +377,17 @@ Tests point `AppState::data_dir` at a temp folder; an earlier test run overwrote
   turned off, so a saved "on" can never apply to a tray that is not there (a greyed-out ON switch was misleading).
   Switching the tray back on leaves them off; the user turns them on again. Tested with real egui pointer frames (the same
   click toggles an enabled switch and does nothing to a disabled one) and a config test for the normalisation.
+
+## D37. macOS: `.pkg` installer instead of a bare `.dmg`
+* On other Macs the downloaded `.dmg`'s app was reported as "\"Tunebox\" is damaged and can't be opened": the linker
+  ad-hoc signs only the inner binary, `cargo packager` does not seal the bundle, and Gatekeeper treats a quarantined
+  bundle with an unsealed signature as damaged (no "Open Anyway").
+* `scripts/package-macos.sh` ad-hoc signs the whole bundle (`codesign --deep -s -`) and wraps it in an unsigned,
+  non-relocatable `pkgbuild` component installing to `/Applications`. Installer does not quarantine payload files; the
+  `postinstall` still runs `xattr -dr com.apple.quarantine` on the installed app.
+* The `.pkg` is itself unsigned: `spctl -t install` says "rejected, no usable signature", so the first open is blocked
+  ("Not Opened") until System Settings → Privacy & Security → Open Anyway. That is a one-time step, not a dead end.
+  Only Developer ID signing + notarisation removes it.
+* Verified on macOS 15.3 (M-series): expanded payload, quarantined copy, ran `postinstall` → flag gone,
+  `codesign --verify --deep --strict` ok, the app launched and rendered home. The real `installer` run (needs admin)
+  and the flow on a second Mac were not run.

@@ -42,7 +42,7 @@ and helper process for the browser, not just the tab).
 | Platform | Status | How |
 |---|---|---|
 | Ubuntu 24.04 (x86_64) | Tested | `.deb` from [Releases](../../releases): `sudo apt install ./tunebox_*.deb` |
-| macOS (Apple Silicon) | Builds, packages and runs; only lightly tested | `.dmg` from Releases (unsigned: right-click → Open) |
+| macOS (Apple Silicon) | Builds, packages and runs; only lightly tested | `.pkg` from Releases (unsigned: first open via System Settings → Privacy & Security → Open Anyway) |
 | Windows 10/11 (x64) | **Untested** | unzip and run `tunebox.exe` (unsigned: SmartScreen will warn) |
 
 ### Build from source

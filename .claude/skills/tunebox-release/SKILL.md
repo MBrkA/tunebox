@@ -19,8 +19,12 @@ runtime checks (tray, media keys, notifications): see `tunebox-platform-check`.
 ## 2. Package (version = workspace `Cargo.toml`, currently 0.1.0)
 * **Linux `.deb`:** `scripts/package-linux.sh` (needs `cargo install cargo-packager --locked` once and the apt packages in
   `docs/DEVELOPMENT.md`) → `dist/tunebox_<ver>_amd64.deb`, prints `dpkg-deb -I`. Inspect contents with `dpkg-deb -c`.
+* **macOS `.pkg` (ship this):** `scripts/package-macos.sh` → ad-hoc signed `dist/Tunebox.app` and
+  `dist/Tunebox_<ver>_aarch64.pkg` (installs to `/Applications`, postinstall clears quarantine; D37). A bare `.dmg`
+  (`cd crates/ytm-app && cargo packager --release --formats dmg`) shows "damaged" on other Macs — don't hand it out.
+  Not notarised: first open of the `.pkg` needs Privacy & Security → Open Anyway.
 * **macOS `.app`/`.dmg`:** `cargo build --release -p ytm-app && cd crates/ytm-app && cargo packager --release --formats app,dmg`
-  → `dist/Tunebox.app`, `dist/Tunebox_<ver>_aarch64.dmg`. Unsigned and un-notarised unless signing is set up (below; Gatekeeper warns otherwise). Built on a Mac;
+  → `dist/Tunebox.app`, `dist/Tunebox_<ver>_aarch64.dmg`. Only hand out the `.dmg` once signing is set up (below); unsigned it shows "damaged" (D37). Built on a Mac;
   launch the `.app` from Finder and check by hand before calling it good.
 * **Windows zip** (cross-compiled from Linux): `scripts/package-windows.sh` → `dist/tunebox-windows-x64.zip` (single
   `tunebox.exe`, ~27 MB, no installer/DLLs). One-time: `rustup target add x86_64-pc-windows-gnu`,
