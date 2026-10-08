@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Also build installers (.deb/AppImage, .app/.dmg)"
+        description: "Also build installers (.deb/AppImage, macOS .pkg or signed .dmg)"
         type: boolean
         default: false
 
@@ -90,13 +90,23 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - name: Package
-        if: steps.apple.outputs.signed != 'true'
+        if: steps.apple.outputs.signed != 'true' && runner.os == 'Linux'
         run: cargo packager --release --formats ${{ matrix.formats }}
         working-directory: crates/ytm-app
+      # Unsigned macOS: ship the ad-hoc sealed .pkg, not the .dmg (its app is reported as "damaged", D37).
+      - name: Package (unsigned macOS .pkg)
+        if: steps.apple.outputs.signed != 'true' && runner.os == 'macOS'
+        run: scripts/package-macos.sh
+      # Installers only: dist/Tunebox.app is a directory and would be attached file by file.
       - uses: actions/upload-artifact@v4
         with:
           name: tunebox-${{ matrix.os }}
-          path: dist/*
+          if-no-files-found: error
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.dmg
+            dist/*.pkg
 
   windows:
     # Native MSVC build of the Windows exe (the zig cross-build in scripts/package-windows.sh is for local use).
@@ -126,7 +136,7 @@ jobs:
           path: dist/tunebox-windows-x64.zip
 
   release:
-    # On a v* tag: attach the .deb/AppImage, .app/.dmg and Windows zip to a *draft* GitHub release to review and publish.
+    # On a v* tag: attach the .deb/AppImage, macOS .pkg (or signed .dmg) and Windows zip to a *draft* GitHub release to review and publish.
     if: startsWith(github.ref, 'refs/tags/')
     needs: [package, windows]
     runs-on: ubuntu-24.04

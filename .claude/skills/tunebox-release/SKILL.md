@@ -46,7 +46,8 @@ tray crate, D27).
 ## 4. CI and tagging (`.github/workflows/ci.yml`)
 * `check` (ubuntu-24.04 + macos-14): fmt, clippy, hermetic tests, release build — on every push.
 * `package`: runs on manual dispatch with the `package` box ticked, or on a `v*` tag. Linux → `deb,appimage`, macOS →
-  `app,dmg`. `windows`: MSVC build, zip uploaded as an artifact.
+  `scripts/package-macos.sh` (`.pkg`, D37) or, when the Apple secrets are set, signed `app,dmg`. Only installer files
+  (`.deb`, `.AppImage`, `.pkg`, `.dmg`) are uploaded, not the `.app` directory. `windows`: MSVC build, zip uploaded as an artifact.
 * `release`: only on a `v*` tag; needs `package` + `windows`, attaches all artifacts to a **draft** GitHub release with
   generated notes. Review and publish it by hand; never publish on the user's behalf unasked.
 * Before tagging: bump the workspace version, make sure `docs/STATUS.md` is current, and don't tag unless the user asks.
