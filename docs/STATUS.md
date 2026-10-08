@@ -9,19 +9,36 @@ metadata, the local library (liked songs, playlists, saved items; survives resta
 UI thread ≈ 1–2 % CPU while playing (≈ 0.65 ms per frame at ~3 repaints/s; the rest of the process is audio/decode
 ≈ 1.5 %); idle ≈ 1.3 %; RSS ≈ 140 MB (GPU) / 210 MB (software rasteriser) with a 20-track queue.
 
-**macOS (Apple Silicon):** built on a Mac (`cargo build --release`, `cargo packager --formats app,dmg` → `.app` and
-`.dmg`, arm64) and run there by the author. CI also compiles and tests it (`macos-14`).
-Checked in a later session by running the release binary on an Apple Silicon Mac: **Retina scaling** (a 1280×860 window
-screenshots at 2560×1632 and renders sharp), **CoreAudio output** (the device opens and the playback clock runs in real
-time for 40+ s; sound itself was not heard), the media-controls object is created ("media controls attached"), and the
-notification decision logic runs (it decided to notify for a track change while the window was in the background).
-Still **not verified** (needs a person at the Mac; the screen was locked, so no further GUI runs were possible):
-MediaRemote media keys / Now Playing widget, the menu-bar icon, that a notification is actually shown, launching the
-`.app` from Finder. **Signing and notarisation** are wired into CI (`package` job) but have never run: they switch on
-when the repository has the `APPLE_*` secrets (see the `tunebox-release` skill); without them the bundles stay unsigned
-and Gatekeeper warns.
-Until then, distribute the `.pkg` from `scripts/package-macos.sh` (D37), not the `.dmg` (reported as "damaged"
-on other Macs).
+**macOS (Apple Silicon):** full pass on 2026-10-08 on an M2 MacBook Air, macOS 15.3.1 (release build; CI also builds,
+tests and packages it on `macos-14`). **Ran and observed:**
+* fmt/clippy/hermetic tests and the `live-tests` suite pass.
+* Every view screenshotted with live data at Retina scale (1280×820 window → 2560×1640, sharp): Home, Explore, Moods,
+  New releases, Charts, search (All + Albums), album, artist, Library, Playlists, History, Settings, shortcut overlay,
+  Now playing, queue at the 640×480 minimum; dark theme follows the system, light theme via `theme = "light"`.
+  First frame 166–234 ms.
+* Playback through CoreAudio: the device runs and the clock keeps real time (0:33 after 35 s); several tracks in a row,
+  streams resolve in 0.1–0.6 s. Sound itself was not heard (the speakers were muted).
+* System Now Playing (MediaRemote, read with a small Swift probe): Tunebox becomes the Now Playing app with title, artist,
+  duration and artwork. MediaRemote commands, the path media keys and Control Center use, all work: play, pause, toggle,
+  next, previous (restarts after 3 s), seek to 60 s.
+* Notifications: with another app in front the decision is `background=true` for every track change and `show()` returns
+  no error; Notification Center lists `dev.tunebox.Tunebox`.
+* Local library: likes and a playlist are written to `library.json`/`playlists/` and show up after a restart.
+* `.app` launched through LaunchServices (`open`, same as Finder). The CI-built `.pkg` payload: bundle sealed
+  (`codesign --verify --deep --strict` ok, ad-hoc), arm64 only, no non-system dylibs, LSMinimumSystemVersion 12.0,
+  postinstall clears quarantine; a quarantined copy of the bare `.app` is rejected by `spctl` (why we ship the `.pkg`).
+* Cost: idle ≈ 2.5 % CPU, playing ≈ 3–5 %, paused ≈ 2 %; physical footprint (Activity Monitor) ≈ 227 MB idle on Home
+  with artwork, ≈ 202 MB playing.
+* Fixed after this pass: lyrics were hard-coded white (unreadable in the light theme; the backdrop is now also washed
+  out there), songs in the artist "top result" search card had no artist, the shortcut overlay said `Alt` (now `Option`).
+* One run saw HTTP 403 on chunks 4–5 and a track failing after re-resolve; not reproduced in two more app runs and three
+  CLI runs. Watch for it.
+
+**Checked by the author on the same Mac:** sound from the speakers, the menu-bar icon and its menu, notification banners
+on track change, physical media keys. **Not verified:** installing the `.pkg` with Installer and the first-open
+"Open Anyway" flow on another Mac.
+**Signing and notarisation** are wired into CI (`package` job) but have never run: they switch on when the repository
+has the `APPLE_*` secrets (see the `tunebox-release` skill); without them CI ships the unsigned `.pkg` (D37).
 
 **Added later, run on macOS (Apple Silicon) only:** time-synced lyrics (LRCLIB; the highlighted line followed real playback),
 listening history (a play was written after 30 s of real playback), the History page and Home shelves from the history
@@ -29,7 +46,8 @@ listening history (a play was written after 30 s of real playback), the History 
 drag itself was not done by hand). Not run on Linux or Windows.
 
 **Not verified:**
-* Audible output — the audio device opens and drains in real time with zero underruns, but sound itself was not heard.
+* Audible output on Linux — the audio device opens and drains in real time with zero underruns, but sound itself was
+  not heard there (on macOS it was, see above).
 
 ## Known limitations
 

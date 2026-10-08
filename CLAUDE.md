@@ -62,8 +62,9 @@ playback/tray/media-key changes drive them for real). On macOS follow the recipe
 * Linux builds draw their own title bar (`views/titlebar.rs`, D20); the scripts' XWayland runs show it too.
 * Never `pkill -f <text that is in your own command line>` (kill by PID).
 * `.claude/worktrees/` can hold GBs of other jobs' build output; never zip/scan the tree without excluding it.
-* macOS builds, packages (`.app`/`.dmg`) and has been run by the author on Apple Silicon, but only lightly: audio, MediaRemote
-  media keys, tray/menu-bar, notifications and Retina scaling were not individually checked. Say so when reporting.
+* macOS (Apple Silicon) had a full pass on 2026-10-08 (views, CoreAudio, MediaRemote Now Playing + commands, notifications,
+  menu-bar icon, local library, `.pkg` payload; see `docs/STATUS.md`). Installing the `.pkg` with Installer on another Mac
+  has not been run. Re-check what you touch; don't extrapolate from that pass.
 * Don't commit unless the user asks.
 
 ## Skills

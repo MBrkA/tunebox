@@ -10,9 +10,9 @@ Last recorded state is in `docs/STATUS.md` and D26–D29 in `docs/DECISIONS.md` 
 
 | Area | Code | Linux (Ubuntu 24.04) | macOS arm64 | Windows 10/11 |
 |---|---|---|---|---|
-| Tray | `tray.rs` | `ksni` (SNI over D-Bus), patched `vendor/ksni` (D27) | `tray-icon`; glyphs in code (D29); menu-bar icon not specifically checked | `tray-icon`; compile-checked only |
+| Tray | `tray.rs` | `ksni` (SNI over D-Bus), patched `vendor/ksni` (D27) | `tray-icon`; glyphs in code (D29); menu-bar icon checked by eye 2026-10-08 | `tray-icon`; compile-checked only |
 | Media keys | `media.rs` | MPRIS via souvlaki | MediaRemote via souvlaki | needs window handle; untested |
-| Notifications | `notify.rs` | `notify-rust` on a short thread; only when playing and window unfocused | check separately | check separately |
+| Notifications | `notify.rs` | `notify-rust` on a short thread; only when playing and window unfocused | watcher task decides (another app in front); banners seen 2026-10-08 | check separately |
 | Title bar | `views/titlebar.rs` | own title bar (D20); `TUNEBOX_NATIVE_TITLEBAR=1` for system | native | native |
 | Close-to-tray | `main.rs` | drops `WAYLAND_DISPLAY` → XWayland (D28) | n/a | n/a |
 | Audio | `ytm-player/output.rs` (cpal) | ALSA/PipeWire/Pulse | CoreAudio | WASAPI; untested |
@@ -43,7 +43,14 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features
   4. Check `run.log`: expect "media controls attached" and "first frame" (~1 s); no errors.
   5. Your real config/session is used: `~/Library/Application Support/dev.tunebox.Tunebox/` (`config.toml`, `session.json`),
      so the screenshot shows the restored track and settings. If a run hangs, `ps aux | grep release/tunebox` and `kill <pid>`.
-  6. Not covered by this recipe (needs a human): audible sound, media keys / Now Playing, menu-bar icon, notifications, Finder launch of the `.app`.
+  6. Now Playing and media keys without a human: a small Swift script that loads
+     `/System/Library/PrivateFrameworks/MediaRemote.framework` and calls `MRMediaRemoteGetNowPlayingInfo` /
+     `MRMediaRemoteGetNowPlayingApplicationPID` shows what Control Center shows; `MRMediaRemoteSendCommand`
+     (0 play, 1 pause, 2 toggle, 4 next, 5 previous, 24 seek with `kMRMediaRemoteOptionPlaybackPosition`) is the path
+     media keys take. CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere` on the default output shows a stream is
+     open (other apps can hold it too). Finder-equivalent launch: `open -n dist/Tunebox.app --stdout log --args …`.
+  7. Still needs a human: audible sound, the menu-bar icon and banners (agent shells usually lack Screen Recording
+     permission, so `screencapture` blanks other apps), installing the `.pkg` (admin password).
 * Verify by eye: menu-bar icon (template image, light + dark), tray menu glyphs, media keys / Now Playing widget,
   Retina scaling, `.app` launches from Finder. Unsigned/un-notarised: Gatekeeper will warn.
 

@@ -15,6 +15,15 @@ fn cmd() -> &'static str {
     }
 }
 
+/// `Alt` is called Option on macOS (spelled out: the bundled fonts have no `⌥` glyph).
+fn alt() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Option"
+    } else {
+        "Alt"
+    }
+}
+
 type Section = (&'static str, Vec<(String, &'static str)>);
 
 /// Sections of (keys, what it does). Must match `TuneboxApp::shortcuts` in `app.rs`.
@@ -41,7 +50,7 @@ fn sections() -> Vec<Section> {
                 (format!("{c} + K  /  /"), t("Search")),
                 (format!("{c} + 1…4"), t("Home, Explore, Library, Playlists")),
                 (format!("{c} + ,"), t("Settings")),
-                ("Alt + ←".into(), t("Back")),
+                (format!("{} + ←", alt()), t("Back")),
                 ("Q".into(), t("Queue")),
                 ("N".into(), t("Open now playing")),
                 ("Esc".into(), t("Close")),

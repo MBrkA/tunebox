@@ -14,14 +14,41 @@ const TYPE_LABELS: &[&str] = &[
 pub fn parse_search(resp: &Value) -> SearchPage {
     let mut items = Vec::new();
 
-    // The "top result" card only exists on unfiltered searches.
+    // The "top result" card only exists on unfiltered searches. When it is an artist, the songs
+    // listed in it leave the artist out of their subtitle ("Song • 5:38"): the card names it.
     let mut cards = Vec::new();
     find_all(resp, "musicCardShelfRenderer", &mut cards);
-    items.extend(cards.into_iter().filter_map(parse_card));
+    let mut card_rows: Vec<(&Value, ArtistRef)> = Vec::new();
+    for card in cards {
+        let Some(item) = parse_card(card) else {
+            continue;
+        };
+        if let (SearchItem::Artist(a), Some(contents)) = (&item, card.get("contents")) {
+            let mut rows = Vec::new();
+            find_all(contents, "musicResponsiveListItemRenderer", &mut rows);
+            let artist = ArtistRef {
+                name: a.name.clone(),
+                id: Some(a.browse_id.clone()),
+            };
+            card_rows.extend(rows.into_iter().map(|r| (r, artist.clone())));
+        }
+        items.push(item);
+    }
 
     let mut rows = Vec::new();
     find_all(resp, "musicResponsiveListItemRenderer", &mut rows);
-    items.extend(rows.into_iter().filter_map(parse_list_item));
+    for row in rows {
+        let Some(mut item) = parse_list_item(row) else {
+            continue;
+        };
+        if let SearchItem::Track(t) = &mut item {
+            if t.artists.is_empty() {
+                let card_artist = card_rows.iter().find(|(r, _)| std::ptr::eq(*r, row));
+                t.artists.extend(card_artist.map(|(_, a)| a.clone()));
+            }
+        }
+        items.push(item);
+    }
 
     SearchPage {
         items,
@@ -349,6 +376,32 @@ mod tests {
         assert!(has(|i| matches!(i, SearchItem::Album(_))));
         // top card is the artist
         assert!(matches!(&page.items[0], SearchItem::Artist(a) if a.name == "Daft Punk"));
+    }
+
+    #[test]
+    fn songs_in_the_artist_top_card_get_the_card_artist() {
+        // Their subtitle is only "Song • 5:38"; the artist is the card's title.
+        let page = parse_search(&fixture("search_all.json"));
+        let crush = page
+            .items
+            .iter()
+            .find_map(|i| match i {
+                SearchItem::Track(t) if t.title.starts_with("Instant Crush") => Some(t),
+                _ => None,
+            })
+            .expect("Instant Crush is in the top card");
+        assert_eq!(crush.artist_line(), "Daft Punk");
+        assert_eq!(
+            crush.artists[0].id.as_deref(),
+            Some("UCRr1xG_2WIDs18a6cIiCxeA")
+        );
+        assert_eq!(crush.duration_secs, Some(5 * 60 + 38));
+        // no track in the mixed results is left without an artist
+        for i in &page.items {
+            if let SearchItem::Track(t) = i {
+                assert!(!t.artists.is_empty(), "{} has no artist", t.title);
+            }
+        }
     }
 
     #[test]

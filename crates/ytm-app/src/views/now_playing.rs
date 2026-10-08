@@ -26,6 +26,12 @@ pub fn show(ui: &mut Ui, app: &mut AppState, thumbs: &Arc<ThumbLoader>, open_t: 
         .as_deref()
         .and_then(|u| thumbs.dominant_color(&ctx, &widgets::art_uri(&ctx, u, 420.0)))
         .unwrap_or(Color32::from_rgb(0x2A, 0x2A, 0x2A));
+    // The dominant colour is kept dark enough for white text; the light theme draws dark text, so there it is
+    // washed out toward the background instead.
+    let target = match theme::mode() {
+        theme::Mode::Dark => target,
+        theme::Mode::Light => target.lerp_to_gamma(c_bg(), 0.6),
+    };
     let channel = |name: &str, v: u8| {
         ctx.animate_value_with_time(egui::Id::new(("np_color", name)), f32::from(v), 0.6)
     };
@@ -203,12 +209,8 @@ fn lyrics(ui: &mut Ui, app: &mut AppState) {
                                 ui.add_space(14.0);
                             } else {
                                 ui.add(
-                                    egui::Label::new(
-                                        theme::bold(line)
-                                            .size(22.0)
-                                            .color(Color32::from_white_alpha(235)),
-                                    )
-                                    .wrap(),
+                                    egui::Label::new(theme::bold(line).size(22.0).color(c_text()))
+                                        .wrap(),
                                 );
                             }
                         }
@@ -249,12 +251,17 @@ fn synced_lyrics(ui: &mut Ui, app: &mut AppState, l: &ytm_api::Lyrics) {
                 } else {
                     &line.text
                 };
-                let alpha = if is_current { 255 } else { 105 };
+                // Theme text colour, not white: the backdrop fades into the light background too.
+                let color = if is_current {
+                    c_text()
+                } else {
+                    c_text().gamma_multiply(0.45)
+                };
                 let r = ui.add(
                     egui::Label::new(
                         theme::bold(text)
                             .size(if is_current { 26.0 } else { 22.0 })
-                            .color(Color32::from_white_alpha(alpha)),
+                            .color(color),
                     )
                     .wrap()
                     .sense(Sense::click()),

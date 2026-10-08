@@ -31,7 +31,7 @@
 
 The YouTube Music website is a full browser tab: hundreds of megabytes of RAM and a fan that spins up when you just
 want some music. Tunebox talks to YouTube directly, decodes the audio itself and draws its own interface, so it
-**opens its first frame in about 100 ms and idles at roughly 100 MB of memory**.
+**opens its first frame in 0.1–0.2 s and barely touches the CPU while it plays**.
 
 | | What you get |
 | --- | --- |
@@ -77,8 +77,8 @@ Your library lives in a folder on your computer (Settings → Application data s
 On GNOME the tray icon needs the AppIndicator extension, which Ubuntu ships enabled. More in the
 [user guide](docs/USER_GUIDE.md).
 
-> **Status:** Ubuntu 24.04 is the tested platform. macOS builds and runs but has only been lightly tested, and the
-> Windows build has not been run yet. Reports are welcome.
+> **Status:** tested on Ubuntu 24.04 and on macOS (Apple Silicon, macOS 15). The Windows build has not been run yet.
+> Reports are welcome.
 
 ## Good to know
 
@@ -99,7 +99,8 @@ compare across machines). Release build, 20-track queue unless noted. Reproduce 
 | UI work per frame | ≈ 0.65 ms (about 3 repaints/s while playing, so ≈ 2 ms of UI CPU per second) | Linux |
 | Idle CPU time | 0.23 s of CPU over 30 s (≈ 8 ms per second), window open, nothing playing | Apple M2, macOS |
 | Memory (RSS) | ≈ 140 MB (GPU renderer) / ≈ 210 MB (software rasteriser) | Linux |
-| Memory (RSS), idle window | ≈ 102 MB | Apple M2, macOS |
+| Memory (Activity Monitor), Home open with artwork / playing | ≈ 227 MB / ≈ 202 MB | Apple M2, macOS |
+| Cold start to first frame | 0.17–0.23 s | Apple M2, macOS |
 | Executable | 29 MB (macOS arm64), ≈ 27 MB (Windows) | release builds |
 
 These are single runs by the author, not a benchmark suite, and not a head-to-head against the web player. To compare
