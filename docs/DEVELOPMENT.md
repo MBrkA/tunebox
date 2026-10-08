@@ -63,7 +63,7 @@ is the library's imitation). macOS always uses its native title bar.
 A 64-bit Windows 10/11 build is produced two ways:
 
 * **From Linux** (what produced the shipped zip): `rustup target add x86_64-pc-windows-gnu`, `cargo install cargo-zigbuild --locked`,
-  put [Zig](https://ziglang.org/download/) on `PATH`, then `scripts/package-windows.sh` → `dist/tunebox-windows-x64.zip`
+  put [Zig](https://ziglang.org/download/) on `PATH`, then `scripts/package-windows.sh` → `dist/tunebox_<ver>_windows-x64.zip`
   (a single `tunebox.exe`, ~27 MB, no installer or extra DLLs; Zig also compiles the icon/version resources).
 * **On Windows / CI**: `cargo build --release -p ytm-app` (MSVC); the `windows` CI job uploads the zip as an artifact.
 

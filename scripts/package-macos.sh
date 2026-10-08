@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the macOS release and packages it as dist/Tunebox.app and dist/Tunebox_<ver>_aarch64.pkg (installer: copies
+# Builds the macOS release and packages it as dist/Tunebox.app and dist/tunebox_<ver>_macos-arm64.pkg (installer: copies
 # Tunebox.app to /Applications and clears the quarantine flag). The .dmg is a separate step
 # (`cargo packager --release --formats dmg`); it re-bundles the .app, dropping the signature added here.
 # Needs: `cargo install cargo-packager --locked`, Xcode command line tools (codesign, pkgbuild).
@@ -17,10 +17,9 @@ if ! cargo packager --version >/dev/null 2>&1; then
 fi
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-ARCH=$(uname -m)
-[ "$ARCH" = arm64 ] && ARCH=aarch64
+ARCH=$(uname -m) # arm64 on Apple Silicon
 APP=dist/Tunebox.app
-PKG=dist/Tunebox_${VERSION}_${ARCH}.pkg
+PKG=dist/tunebox_${VERSION}_macos-${ARCH}.pkg
 
 cargo build --release -p ytm-app
 mkdir -p dist
