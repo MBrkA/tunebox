@@ -275,9 +275,19 @@ pub fn open(
             std::thread::Builder::new()
                 .name("ytm-null-sink".into())
                 .spawn(move || {
-                    let mut tmp = vec![0.0f32; (b.rate as usize / 100) * b.channels];
+                    // Drain by wall-clock time, not per wake-up: sleeps overshoot a lot on
+                    // loaded machines (macOS timer coalescing), which would slow playback down.
+                    let start = std::time::Instant::now();
+                    let mut drained = 0u64; // frames
+                    let mut tmp = Vec::new();
                     while !s.load(Ordering::Relaxed) {
-                        b.fill(&mut tmp);
+                        let due = (start.elapsed().as_secs_f64() * b.rate as f64) as u64;
+                        let frames = due.saturating_sub(drained) as usize;
+                        if frames > 0 {
+                            tmp.resize(frames * b.channels, 0.0);
+                            b.fill(&mut tmp);
+                            drained += frames as u64;
+                        }
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 })
