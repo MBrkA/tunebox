@@ -44,10 +44,11 @@ jobs' builds and made `zip` hang for 20+ min). Output `../tunebox-<date>.zip`; i
 tray crate, D27).
 
 ## 4. CI and tagging (`.github/workflows/ci.yml`)
-* `check` (ubuntu-24.04 + macos-14): fmt, clippy, hermetic tests, release build — on every push.
+* `check` (ubuntu-24.04 + macos-14): fmt, clippy, hermetic tests — on every push (no release build: it cost 2-4 min).
+  Release builds only happen in `package`/`windows` on a tag or a manual run with `package` ticked.
 * `package`: runs on manual dispatch with the `package` box ticked, or on a `v*` tag. Linux → `deb,appimage`, macOS →
   `scripts/package-macos.sh` (`.pkg`, D37) or, when the Apple secrets are set, signed `app,dmg`. Only installer files
-  (`.deb`, `.AppImage`, `.pkg`, `.dmg`) are uploaded, not the `.app` directory. `windows`: MSVC build, zip uploaded as an artifact.
+  (`.deb`, `.AppImage`, `.pkg`, `.dmg`) are uploaded, not the `.app` directory. `windows`: tests on every push; MSVC release build + zip artifact only on a tag or packaging run.
 * `release`: only on a `v*` tag; needs `package` + `windows`, attaches all artifacts to a **draft** GitHub release with
   generated notes. Review and publish it by hand; never publish on the user's behalf unasked.
 * Before tagging: bump the workspace version, make sure `docs/STATUS.md` is current, and don't tag unless the user asks.
