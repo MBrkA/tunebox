@@ -91,11 +91,16 @@ pub fn show(ui: &mut Ui, app: &mut AppState, thumbs: &Arc<ThumbLoader>, open_t: 
     );
     ui.scope_builder(UiBuilder::new().max_rect(left), |ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(art_size, art_size), Sense::hover());
-        ui.painter().rect_filled(
-            rect.translate(vec2(0.0, 10.0)).expand(2.0),
-            CornerRadius::same(18),
-            Color32::from_black_alpha(90),
-        );
+        // Soft shadow: stacked low-alpha layers that share the art's corner radius, so no hard dark
+        // box shows past the cover's edges.
+        for i in 1..=6u8 {
+            let grow = f32::from(i) * 3.0;
+            ui.painter().rect_filled(
+                rect.translate(vec2(0.0, 6.0)).expand(grow),
+                CornerRadius::same(theme::CARD_RADIUS + 2 + i * 3),
+                Color32::from_black_alpha(14),
+            );
+        }
         widgets::paint_art(
             ui,
             rect,
