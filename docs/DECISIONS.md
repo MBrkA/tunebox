@@ -391,3 +391,15 @@ Tests point `AppState::data_dir` at a temp folder; an earlier test run overwrote
 * Verified on macOS 15.3 (M-series): expanded payload, quarantined copy, ran `postinstall` → flag gone,
   `codesign --verify --deep --strict` ok, the app launched and rendered home. The real `installer` run (needs admin)
   and the flow on a second Mac were not run.
+
+## D38. Song rows show a heart and "more" on hover; Korean gets its own fallback font
+* A UI review (Krug/Nielsen heuristics) found liking and "Add to playlist" reachable only by right-click, unless the song
+  was already playing. `common::row_menu` puts a heart and a `⋯` on every list row: they appear for the pointer or the
+  keyboard focus, and a liked song keeps its heart. The queue keeps its own menu; cards stay right-click only.
+* `⋯` opens the same `Popup::context_menu` as right click (`open_memory`), so there is one menu to maintain.
+* macOS's STHeiti and Windows' Microsoft YaHei have no Hangul, so Korean drew as `□`/`?`. `theme::fonts` adds
+  `AppleSDGothicNeo.ttc` / `malgun.ttf` after the Chinese font. Measured on macOS, same page, 1 s samples: peak RSS rose from
+  223 to 330 MB for about 12 s after start, then both builds settled at 123 MB. Colour emoji in titles still draw as `□`.
+* "Clear" in the queue has no confirmation: it keeps a `session::Session` in `AppState::cleared_queue` and the empty
+  queue offers Undo (`Command::Restore`, then `Resume` if it was playing). Checked live: same track, playing, at 0:51.
+* `c_text_faint` and the now-playing lyric dimming were raised to reach 4.5:1 on flat backgrounds and 3:1 for the 22 pt lyrics.

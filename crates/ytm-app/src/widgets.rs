@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use eframe::egui::{
     self, pos2, text::LayoutJob, vec2, Align2, Color32, CornerRadius, CursorIcon, FontId, Galley,
-    Painter, Rect, Response, Sense, Ui, Vec2,
+    Painter, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
 use egui_phosphor::regular as icon;
 use ytm_api::{pick_thumbnail, Thumbnail, Track};
@@ -14,6 +14,8 @@ use crate::theme::{self, c_bg, c_border, c_surface_hover, c_text, c_text_dim, AC
 use crate::thumbs::sized_url;
 
 pub const ROW_HEIGHT: f32 = 56.0;
+/// Room a [`track_row`] keeps between its text and the duration for the row's buttons.
+const ROW_ACTIONS_WIDTH: f32 = 72.0;
 
 /// Lays out `text` on one line, ellipsised to `max_width`.
 pub fn fit_text(
@@ -97,6 +99,13 @@ fn icon_button_in(
             ui.painter()
                 .circle_filled(rect.center(), rect.width() / 2.0, c_surface_hover());
         }
+        if resp.has_focus() {
+            ui.painter().circle_stroke(
+                rect.center(),
+                rect.width() / 2.0 - 1.0,
+                Stroke::new(1.5, ACCENT),
+            );
+        }
         let color = if active {
             ACCENT
         } else if hovered {
@@ -120,10 +129,23 @@ fn icon_button_in(
 }
 
 /// The big white play/pause disc.
-pub fn play_button(ui: &mut Ui, playing: bool, loading: bool, diameter: f32) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click());
-    let hovered = resp.hovered();
-    let fill = if hovered {
+pub fn play_button(
+    ui: &mut Ui,
+    playing: bool,
+    loading: bool,
+    enabled: bool,
+    diameter: f32,
+) -> Response {
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(diameter), sense);
+    let hovered = enabled && resp.hovered();
+    let fill = if !enabled {
+        c_surface_hover()
+    } else if hovered {
         theme::c_primary_hover()
     } else {
         theme::c_primary()
@@ -147,7 +169,11 @@ pub fn play_button(ui: &mut Ui, playing: bool, loading: bool, diameter: f32) -> 
             Align2::CENTER_CENTER,
             glyph,
             FontId::new(diameter * 0.5, theme::fill_icons()),
-            c_bg(),
+            if enabled {
+                c_bg()
+            } else {
+                theme::c_text_faint()
+            },
         );
     }
     let label = if playing {
@@ -155,8 +181,12 @@ pub fn play_button(ui: &mut Ui, playing: bool, loading: bool, diameter: f32) -> 
     } else {
         crate::i18n::t("Play")
     };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    resp.on_hover_cursor(CursorIcon::PointingHand)
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    if enabled {
+        resp.on_hover_cursor(CursorIcon::PointingHand)
+    } else {
+        resp
+    }
 }
 
 /// Rounded chip used for filters.
@@ -452,7 +482,14 @@ pub fn track_row(
     current: bool,
     playing: bool,
 ) -> Response {
-    track_row_sense(ui, track, number, current, playing, Sense::click())
+    track_row_impl(
+        ui,
+        track,
+        number,
+        (current, playing),
+        Sense::click(),
+        ROW_ACTIONS_WIDTH,
+    )
 }
 
 /// `track_row` with a custom `Sense` (the queue rows add dragging).
@@ -464,18 +501,38 @@ pub fn track_row_sense(
     playing: bool,
     sense: Sense,
 ) -> Response {
+    track_row_impl(ui, track, number, (current, playing), sense, 0.0)
+}
+
+fn track_row_impl(
+    ui: &mut Ui,
+    track: &Track,
+    number: Option<usize>,
+    (current, playing): (bool, bool),
+    sense: Sense,
+    actions_width: f32,
+) -> Response {
     let width = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), sense);
     if !ui.is_rect_visible(rect) {
         return resp;
     }
-    if resp.hovered() || current {
+    // Not `resp.hovered()`: the row's own buttons sit on top of it.
+    if ui.rect_contains_pointer(rect) || current {
         let fill = if current {
             theme::c_surface()
         } else {
             c_surface_hover()
         };
         ui.painter().rect_filled(rect, CornerRadius::same(10), fill);
+    }
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect.shrink(1.0),
+            CornerRadius::same(10),
+            Stroke::new(1.5, ACCENT),
+            egui::StrokeKind::Inside,
+        );
     }
     let x0 = rect.left() + 8.0;
     let mut x = x0;
@@ -518,7 +575,7 @@ pub fn track_row_sense(
     x = art_rect.right() + 14.0;
 
     let duration = track.duration_secs.map(|d| format_time(u64::from(d)));
-    let right_w = 64.0;
+    let right_w = 64.0 + actions_width;
     let text_w = (rect.right() - x - right_w - 12.0).max(40.0);
     let p = ui.painter();
     let title_color = if current { ACCENT } else { c_text() };
@@ -822,7 +879,7 @@ pub fn split_button(ui: &mut Ui, glyph: &str, label: &str, active: bool) -> Spli
     SplitButton {
         main: main.on_hover_cursor(CursorIcon::PointingHand),
         arrow: arrow
-            .on_hover_text("More actions")
+            .on_hover_text(crate::i18n::t("More actions"))
             .on_hover_cursor(CursorIcon::PointingHand),
     }
 }
@@ -946,7 +1003,7 @@ pub fn edit_row(ui: &mut Ui, track: &Track, index: usize, dimmed: bool) -> EditR
         });
     }
     let remove = remove
-        .on_hover_text("Remove from playlist")
+        .on_hover_text(crate::i18n::t("Remove from playlist"))
         .on_hover_cursor(CursorIcon::PointingHand);
     EditRow {
         rect,

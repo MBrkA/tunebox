@@ -79,7 +79,7 @@ pub fn show(ui: &mut Ui, app: &mut AppState) {
             }
             if !ps.tracks.is_empty() && widgets::pill(ui, crate::i18n::t("Clear"), false).clicked()
             {
-                app.playback(Command::Clear);
+                app.run(crate::state::UiAction::ClearQueue);
             }
             if !ps.tracks.is_empty()
                 && widgets::pill(ui, crate::i18n::t("Save as playlist"), false).clicked()
@@ -97,6 +97,12 @@ pub fn show(ui: &mut Ui, app: &mut AppState) {
             ))
             .color(c_text_dim()),
         );
+        if app.cleared_queue.is_some() {
+            ui.add_space(10.0);
+            if widgets::pill(ui, crate::i18n::t("Undo"), false).clicked() {
+                app.run(crate::state::UiAction::UndoClearQueue);
+            }
+        }
         return;
     }
 
@@ -111,7 +117,14 @@ pub fn show(ui: &mut Ui, app: &mut AppState) {
                         .color(c_text_dim())
                         .size(12.5),
                 );
-                let r = widgets::track_row(ui, &ps.tracks[i], None, true, playing);
+                let r = widgets::track_row_sense(
+                    ui,
+                    &ps.tracks[i],
+                    None,
+                    true,
+                    playing,
+                    egui::Sense::click(),
+                );
                 r.context_menu(|ui| {
                     crate::views::common::style_menu(ui);
                     if ui.button(crate::i18n::t("Remove from queue")).clicked() {

@@ -67,6 +67,12 @@ fn grid_or_message(
 pub fn library(ui: &mut Ui, app: &mut AppState) {
     let mut out = Vec::new();
     ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(crate::i18n::t("Library"))
+            .text_style(egui::TextStyle::Heading)
+            .color(crate::theme::c_text()),
+    );
+    ui.add_space(10.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         for (tab, label) in [
@@ -88,7 +94,7 @@ pub fn library(ui: &mut Ui, app: &mut AppState) {
                 common::message(
                     ui,
                     crate::i18n::t("No liked songs yet"),
-                    crate::i18n::t("Tap the heart on a song to keep it here."),
+                    crate::i18n::t("Click the heart next to a song to keep it here."),
                 );
             } else {
                 let ps = app.ps.clone();
@@ -135,7 +141,7 @@ pub fn library(ui: &mut Ui, app: &mut AppState) {
                 ui,
                 &items,
                 crate::i18n::t("No saved albums"),
-                "Use “Save” on an album page.",
+                crate::i18n::t("Use “Save” on an album page."),
                 &mut out,
             );
         }
@@ -151,7 +157,7 @@ pub fn library(ui: &mut Ui, app: &mut AppState) {
                 ui,
                 &items,
                 crate::i18n::t("No saved artists"),
-                "Use “Save” on an artist page.",
+                crate::i18n::t("Use “Save” on an artist page."),
                 &mut out,
             );
         }

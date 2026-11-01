@@ -107,6 +107,7 @@ fn transport(ui: &mut Ui, app: &mut AppState, shuffle_repeat: bool) {
     let rect = ui.max_rect();
     let ps = app.ps.clone();
     let has_track = ps.current.is_some();
+    let has_queue = !ps.tracks.is_empty();
     let loading = ps.status == Status::Loading;
     let playing = ps.status == Status::Playing;
 
@@ -132,16 +133,28 @@ fn transport(ui: &mut Ui, app: &mut AppState, shuffle_repeat: bool) {
             {
                 app.playback(Command::SetShuffle(!ps.shuffle));
             }
-            if widgets::icon_button(ui, icon::SKIP_BACK, 22.0, false, crate::i18n::t("Previous"))
-                .clicked()
+            if widgets::icon_button_enabled(
+                ui,
+                icon::SKIP_BACK,
+                22.0,
+                has_queue,
+                crate::i18n::t("Previous"),
+            )
+            .clicked()
             {
                 app.playback(Command::Prev);
             }
-            if widgets::play_button(ui, playing, loading, 44.0).clicked() {
+            if widgets::play_button(ui, playing, loading, has_queue, 44.0).clicked() {
                 app.playback(Command::Toggle);
             }
-            if widgets::icon_button(ui, icon::SKIP_FORWARD, 22.0, false, crate::i18n::t("Next"))
-                .clicked()
+            if widgets::icon_button_enabled(
+                ui,
+                icon::SKIP_FORWARD,
+                22.0,
+                has_queue,
+                crate::i18n::t("Next"),
+            )
+            .clicked()
             {
                 app.playback(Command::Next);
             }

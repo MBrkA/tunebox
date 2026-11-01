@@ -202,7 +202,9 @@ impl Backend {
             let mut rx = b.player.subscribe();
             loop {
                 match rx.recv().await {
-                    Ok(PlayerEvent::Error(msg)) => b.emit(Event::Toast(format!("Playback: {msg}"))),
+                    Ok(PlayerEvent::Error(msg)) => b.emit(Event::Toast(
+                        crate::i18n::t("Playback: {}").replace("{}", &msg),
+                    )),
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => break,
@@ -230,7 +232,7 @@ impl Backend {
                 let this = self.clone();
                 rt.spawn_blocking(move || {
                     let picked = rfd::FileDialog::new()
-                        .set_title("Back up data")
+                        .set_title(crate::i18n::t("Back up data"))
                         .set_file_name("tunebox-backup.json")
                         .add_filter("Tunebox backup", &["json"])
                         .save_file();
@@ -239,10 +241,13 @@ impl Backend {
                         .map_err(std::io::Error::other)
                         .and_then(|bytes| std::fs::write(&path, bytes));
                     match result {
-                        Ok(()) => {
-                            this.emit(Event::Toast(format!("Backup saved to {}", path.display())))
-                        }
-                        Err(e) => this.emit(Event::Toast(format!("Could not back up: {e}"))),
+                        Ok(()) => this.emit(Event::Toast(
+                            crate::i18n::t("Backup saved to {}")
+                                .replace("{}", &path.display().to_string()),
+                        )),
+                        Err(e) => this.emit(Event::Toast(
+                            crate::i18n::t("Could not back up: {}").replace("{}", &e.to_string()),
+                        )),
                     }
                 });
             }
@@ -250,7 +255,7 @@ impl Backend {
                 let this = self.clone();
                 rt.spawn_blocking(move || {
                     let picked = rfd::FileDialog::new()
-                        .set_title("Restore from backup")
+                        .set_title(crate::i18n::t("Restore from backup"))
                         .add_filter("Tunebox backup", &["json"])
                         .pick_file();
                     let Some(path) = picked else { return };
@@ -261,7 +266,9 @@ impl Backend {
                         Ok((lib, settings)) => {
                             this.emit(Event::RestoreRequested(Box::new(lib), settings))
                         }
-                        Err(e) => this.emit(Event::Toast(format!("Could not restore: {e}"))),
+                        Err(e) => this.emit(Event::Toast(
+                            crate::i18n::t("Could not restore: {}").replace("{}", &e.to_string()),
+                        )),
                     }
                 });
             }
@@ -269,7 +276,7 @@ impl Backend {
                 let this = self.clone();
                 rt.spawn_blocking(move || {
                     let Some(target) = rfd::FileDialog::new()
-                        .set_title("Choose a folder for Tunebox data")
+                        .set_title(crate::i18n::t("Choose a folder for Tunebox data"))
                         .pick_folder()
                     else {
                         return;
@@ -432,10 +439,13 @@ impl Backend {
                                 start: 0,
                             });
                         }
-                        Ok(_) => {
-                            this.emit(Event::Toast("No radio available for this track".into()))
-                        }
-                        Err(e) => this.emit(Event::Toast(format!("Could not start radio: {e}"))),
+                        Ok(_) => this.emit(Event::Toast(
+                            crate::i18n::t("No radio available for this track").into(),
+                        )),
+                        Err(e) => this.emit(Event::Toast(
+                            crate::i18n::t("Could not start radio: {}")
+                                .replace("{}", &e.to_string()),
+                        )),
                     }
                 });
             }
@@ -443,19 +453,21 @@ impl Backend {
                 let this = self.clone();
                 rt.spawn_blocking(move || {
                     let picked = rfd::FileDialog::new()
-                        .set_title("Export playlist")
+                        .set_title(crate::i18n::t("Export playlist"))
                         .set_file_name(crate::local::export_file_name(&playlist.title))
                         .add_filter("Tunebox playlist", &["json"])
                         .save_file();
                     let Some(path) = picked else { return };
                     let text = crate::local::export_playlist(&playlist);
                     match std::fs::write(&path, text) {
-                        Ok(()) => this.emit(Event::Toast(format!(
-                            "Exported {} songs to {}",
-                            playlist.tracks.len(),
-                            path.display()
-                        ))),
-                        Err(e) => this.emit(Event::Toast(format!("Could not export: {e}"))),
+                        Ok(()) => this.emit(Event::Toast(
+                            crate::i18n::t("Exported {} songs to {}")
+                                .replacen("{}", &playlist.tracks.len().to_string(), 1)
+                                .replacen("{}", &path.display().to_string(), 1),
+                        )),
+                        Err(e) => this.emit(Event::Toast(
+                            crate::i18n::t("Could not export: {}").replace("{}", &e.to_string()),
+                        )),
                     }
                 });
             }
@@ -463,7 +475,7 @@ impl Backend {
                 let this = self.clone();
                 rt.spawn_blocking(move || {
                     let picked = rfd::FileDialog::new()
-                        .set_title("Choose a playlist cover")
+                        .set_title(crate::i18n::t("Choose a playlist cover"))
                         .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
                         .pick_file();
                     let Some(path) = picked else { return };
@@ -482,7 +494,10 @@ impl Backend {
                         });
                     match result {
                         Ok(()) => this.emit(Event::PlaylistCover { id, file }),
-                        Err(e) => this.emit(Event::Toast(format!("Could not set the cover: {e}"))),
+                        Err(e) => this.emit(Event::Toast(
+                            crate::i18n::t("Could not set the cover: {}")
+                                .replace("{}", &e.to_string()),
+                        )),
                     }
                 });
             }
@@ -490,7 +505,7 @@ impl Backend {
                 let this = self.clone();
                 rt.spawn_blocking(move || {
                     let picked = rfd::FileDialog::new()
-                        .set_title("Import playlist")
+                        .set_title(crate::i18n::t("Import playlist"))
                         .add_filter("Tunebox playlist", &["json"])
                         .pick_file();
                     let Some(path) = picked else { return };
@@ -499,7 +514,9 @@ impl Backend {
                         .and_then(|t| crate::local::import_playlist(&t));
                     match parsed {
                         Ok((title, tracks)) => this.emit(Event::PlaylistImported { title, tracks }),
-                        Err(e) => this.emit(Event::Toast(format!("Could not import: {e}"))),
+                        Err(e) => this.emit(Event::Toast(
+                            crate::i18n::t("Could not import: {}").replace("{}", &e.to_string()),
+                        )),
                     }
                 });
             }
@@ -533,9 +550,10 @@ impl Backend {
                     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
                     if let Err(e) = library.write(&path) {
                         tracing::error!(error = %e, "could not save local library");
-                        this.emit(Event::Toast(format!(
-                            "Could not save your local library: {e}"
-                        )));
+                        this.emit(Event::Toast(
+                            crate::i18n::t("Could not save your local library: {}")
+                                .replace("{}", &e.to_string()),
+                        ));
                     }
                 });
             }

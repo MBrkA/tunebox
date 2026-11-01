@@ -401,6 +401,12 @@ fn page(ui: &mut Ui, app: &mut AppState, out: &mut Vec<UiAction>) {
         about_row(ui, t("Version"), env!("CARGO_PKG_VERSION"));
         ui.add_space(4.0);
         about_row(ui, t("Developed by"), DEVELOPER);
+        ui.add_space(4.0);
+        row(ui, t("Keyboard shortcuts"), None, |ui| {
+            if widgets::pill(ui, t("Show"), false).clicked() {
+                out.push(UiAction::ShowHelp);
+            }
+        });
     });
     ui.add_space(28.0);
 }
@@ -419,7 +425,7 @@ fn about_row(ui: &mut Ui, label: &str, value: &str) {
 fn save_config(app: &mut AppState) {
     if let Err(e) = app.save_config() {
         tracing::warn!("could not save settings: {e}");
-        app.toast(format!("Could not save settings: {e}"));
+        app.toast(crate::i18n::t("Could not save settings: {}").replace("{}", &e.to_string()));
     }
 }
 

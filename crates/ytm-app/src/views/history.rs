@@ -301,11 +301,15 @@ fn chart(ui: &mut Ui, per_day: &[u32; 14]) {
             1 => crate::i18n::t("Yesterday").to_owned(),
             n => crate::i18n::t("{} days ago").replace("{}", &n.to_string()),
         };
-        resp.on_hover_text(format!("{when}: {n} {}", crate::i18n::t("plays")));
+        resp.on_hover_text(format!("{when}: {n} {}", plays_word(u64::from(n))));
     }
 }
 
 /// One line of a ranking: position, name, play count. Returns whether it was clicked.
+fn plays_word(n: u64) -> &'static str {
+    crate::i18n::t(if n == 1 { "play" } else { "plays" })
+}
+
 fn ranked_row(ui: &mut Ui, index: usize, name: &str, plays: u32, clickable: bool) -> bool {
     let sense = if clickable {
         Sense::click()
@@ -341,7 +345,7 @@ fn ranked_row(ui: &mut Ui, index: usize, name: &str, plays: u32, clickable: bool
         p.text(
             pos2(rect.right() - 16.0, rect.center().y),
             Align2::RIGHT_CENTER,
-            format!("{plays} {}", crate::i18n::t("plays")),
+            format!("{plays} {}", plays_word(u64::from(plays))),
             FontId::proportional(13.0),
             c_text_dim(),
         );

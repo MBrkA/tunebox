@@ -35,7 +35,7 @@ pub const DARK: Palette = Palette {
     border: Color32::from_rgb(0x2A, 0x2A, 0x2A),
     text: Color32::from_rgb(0xF5, 0xF5, 0xF5),
     text_dim: Color32::from_rgb(0xAA, 0xAA, 0xAA),
-    text_faint: Color32::from_rgb(0x70, 0x70, 0x70),
+    text_faint: Color32::from_rgb(0x82, 0x82, 0x82),
     primary: Color32::from_gray(0xF1),
     on_primary: Color32::from_rgb(0x0F, 0x0F, 0x0F),
     primary_hover: Color32::WHITE,
@@ -51,7 +51,7 @@ pub const LIGHT: Palette = Palette {
     border: Color32::from_rgb(0xD8, 0xD8, 0xDC),
     text: Color32::from_rgb(0x14, 0x14, 0x16),
     text_dim: Color32::from_rgb(0x55, 0x55, 0x5C),
-    text_faint: Color32::from_rgb(0x8E, 0x8E, 0x96),
+    text_faint: Color32::from_rgb(0x6B, 0x6B, 0x73),
     primary: Color32::from_rgb(0x14, 0x14, 0x16),
     on_primary: Color32::WHITE,
     primary_hover: Color32::from_rgb(0x34, 0x34, 0x3A),
@@ -258,13 +258,19 @@ pub fn fonts() -> FontDefinitions {
         .insert(bold_family(), vec!["inter-bold".into(), "inter".into()]);
 
     // Inter has no Chinese/Japanese/Korean glyphs; borrow one from the system when there is one.
-    if let Some(data) = system_cjk_font() {
-        fonts.font_data.insert("cjk".into(), data.into());
+    for (name, candidates) in [("cjk", CJK_FONTS), ("hangul", HANGUL_FONTS)] {
+        let Some(data) = system_font(candidates) else {
+            tracing::info!(
+                name,
+                "no system font found; these characters will not render"
+            );
+            continue;
+        };
+        fonts.font_data.insert(name.into(), data.into());
         for family in [FontFamily::Proportional, bold_family()] {
-            fonts.families.entry(family).or_default().push("cjk".into());
+            fonts.families.entry(family).or_default().push(name.into());
         }
     }
-
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     egui_phosphor::add_font_bytes_as_family(
         &mut fonts,
@@ -281,32 +287,38 @@ pub fn fonts() -> FontDefinitions {
 }
 
 /// A Simplified-Chinese capable font from the operating system (not bundled: they are 10+ MB).
-fn system_cjk_font() -> Option<FontData> {
-    // (path, face index inside a .ttc collection)
-    const CANDIDATES: &[(&str, u32)] = &[
-        // Linux: Noto Sans CJK ships as a collection ordered JP, KR, SC, TC, HK.
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),
-        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 2),
-        ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", 0),
-        (
-            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-            0,
-        ),
-        // macOS
-        ("/System/Library/Fonts/PingFang.ttc", 0),
-        ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
-        // Windows
-        ("C:\\Windows\\Fonts\\msyh.ttc", 0),
-        ("C:\\Windows\\Fonts\\simsun.ttc", 0),
-    ];
-    for (path, index) in CANDIDATES {
+/// `(path, face index inside a .ttc collection)`
+const CJK_FONTS: &[(&str, u32)] = &[
+    // Linux: Noto Sans CJK ships as a collection ordered JP, KR, SC, TC, HK.
+    ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),
+    ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 2),
+    ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", 0),
+    (
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        0,
+    ),
+    // macOS
+    ("/System/Library/Fonts/PingFang.ttc", 0),
+    ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
+    // Windows
+    ("C:\\Windows\\Fonts\\msyh.ttc", 0),
+    ("C:\\Windows\\Fonts\\simsun.ttc", 0),
+];
+
+/// Korean: the Chinese fonts above have no Hangul on macOS and Windows (Noto Sans CJK on Linux does).
+const HANGUL_FONTS: &[(&str, u32)] = &[
+    ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
+    ("C:\\Windows\\Fonts\\malgun.ttf", 0),
+];
+
+fn system_font(candidates: &[(&str, u32)]) -> Option<FontData> {
+    for (path, index) in candidates {
         if let Ok(bytes) = std::fs::read(path) {
             let mut data = FontData::from_owned(bytes);
             data.index = *index;
             return Some(data);
         }
     }
-    tracing::info!("no system CJK font found; Chinese text will not render");
     None
 }
 
@@ -358,6 +370,8 @@ pub fn visuals() -> egui::Visuals {
     };
     v.dark_mode = dark;
     v.override_text_color = None;
+    // Hint text (the search box's placeholder) is faint text, not a fixed fade of the body colour.
+    v.weak_text_color = Some(c_text_faint());
     v.panel_fill = c_bg();
     v.window_fill = c_surface();
     v.extreme_bg_color = if dark {

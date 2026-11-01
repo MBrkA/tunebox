@@ -62,7 +62,10 @@ impl<T> Load<T> {
     fn from_result(r: Result<T, String>) -> Self {
         match r {
             Ok(v) => Self::Ready(Arc::new(v)),
-            Err(e) => Self::Failed(e),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not load a page");
+                Self::Failed(e)
+            }
         }
     }
 }
@@ -115,6 +118,22 @@ pub enum UiAction {
     ShufflePlay(Vec<Track>),
     /// Forget the whole listening history.
     ClearHistory,
+    /// Empty the queue, keeping a copy for [`UiAction::UndoClearQueue`].
+    ClearQueue,
+    UndoClearQueue,
+    /// Open the keyboard-shortcut cheat-sheet.
+    ShowHelp,
+}
+
+/// What to tell the user about a failed YouTube request; the full text goes to the log.
+pub fn friendly_error(detail: &str) -> String {
+    if detail.starts_with("network error") {
+        crate::i18n::t("Can't reach YouTube. Check your connection.").to_owned()
+    } else if detail.starts_with("unexpected response shape") || detail.starts_with("json error") {
+        crate::i18n::t("YouTube sent an unexpected response. Try again later.").to_owned()
+    } else {
+        detail.to_owned()
+    }
 }
 
 /// "More like this" for one seed track, shown on Home.
@@ -218,7 +237,11 @@ pub struct AppState {
     /// Snapshot of the player taken at the start of each frame.
     pub ps: PlayerState,
     pub now_playing_open: bool,
+    /// Narrow windows show the lyrics instead of the artwork.
+    pub now_playing_lyrics: bool,
     pub queue_open: bool,
+    /// The queue before "Clear", and whether it was playing.
+    pub cleared_queue: Option<(crate::session::Session, bool)>,
     /// The keyboard-shortcut cheat-sheet (`?`).
     pub help_open: bool,
     /// Set by the `/` shortcut; the top bar focuses the search box and clears it.
@@ -294,7 +317,9 @@ impl AppState {
             player,
             ps,
             now_playing_open: false,
+            now_playing_lyrics: false,
             queue_open: false,
+            cleared_queue: None,
             help_open: false,
             search_focus_requested: false,
             home: Load::Idle,
@@ -776,7 +801,7 @@ impl AppState {
         let liked = self.local.toggle_like(track);
         self.local_changed();
         if liked {
-            self.toast(format!("Added “{}” to liked songs", track.title));
+            self.toast(crate::i18n::t("Added “{}” to liked songs").replace("{}", &track.title));
         }
     }
 
@@ -797,7 +822,7 @@ impl AppState {
         }
         let id = self.local.create_playlist(&title, np.tracks);
         self.local_changed();
-        self.toast(format!("Created playlist “{title}”"));
+        self.toast(crate::i18n::t("Created playlist “{}”").replace("{}", &title));
         // Show it right away when created from the Playlists page.
         if self.route == Route::Playlists {
             self.navigate(Route::Playlist(id));
@@ -813,17 +838,53 @@ impl AppState {
             .collect()
     }
 
+    /// The queue, current track and position, as saved between runs.
+    pub fn session_snapshot(&self) -> crate::session::Session {
+        let ps = &self.ps;
+        let (tracks, current) = match ps.current {
+            // a shuffled queue is reshuffled on restore, so only the unshuffled order is worth keeping
+            Some(cur) if !ps.shuffle => {
+                let (order, at) = crate::session::save_order(ps.tracks.len(), cur, &ps.upcoming);
+                (order.iter().map(|&i| ps.tracks[i].clone()).collect(), at)
+            }
+            cur => (ps.tracks.as_ref().clone(), cur.unwrap_or(0)),
+        };
+        crate::session::Session {
+            tracks,
+            current,
+            position_ms: self.player.position().as_millis() as u64,
+            shuffle: ps.shuffle,
+            repeat: crate::session::repeat_code(ps.repeat),
+        }
+    }
+
     pub fn run(&mut self, action: UiAction) {
         match action {
+            UiAction::ClearQueue => {
+                let playing = self.ps.status == ytm_player::Status::Playing;
+                self.cleared_queue = Some((self.session_snapshot(), playing));
+                self.playback(Command::Clear);
+            }
+            UiAction::UndoClearQueue => {
+                if let Some((session, playing)) = self.cleared_queue.take() {
+                    if let Some(restore) = session.into_command() {
+                        self.playback(restore);
+                        if playing {
+                            self.playback(Command::Resume);
+                        }
+                    }
+                }
+            }
+            UiAction::ShowHelp => self.help_open = true,
             UiAction::ToggleLike(track) => self.toggle_like(&track),
             UiAction::ToggleSaved(item) => {
                 let saved = self.local.toggle_saved(&item);
                 self.local_changed();
                 self.toast(
                     if saved {
-                        "Saved to your library on this device"
+                        crate::i18n::t("Saved to your library on this device")
                     } else {
-                        "Removed from your library"
+                        crate::i18n::t("Removed from your library")
                     }
                     .into(),
                 );
@@ -836,8 +897,10 @@ impl AppState {
                 let added = self.local.add_to_playlist(&playlist_id, &tracks);
                 self.local_changed();
                 self.toast(match added {
-                    0 => format!("Already in “{title}”"),
-                    n => format!("Added {n} to “{title}”"),
+                    0 => crate::i18n::t("Already in “{}”").replace("{}", &title),
+                    n => crate::i18n::t("Added {} to “{}”")
+                        .replacen("{}", &n.to_string(), 1)
+                        .replacen("{}", &title, 1),
                 });
             }
             UiAction::LocalRemoveTrack { playlist_id, index } => {
@@ -872,7 +935,7 @@ impl AppState {
                 });
             }
             UiAction::ExportPlaylist(id) => match self.local.playlist(&id) {
-                Some(p) if p.pending() => self.toast(STILL_LOADING.into()),
+                Some(p) if p.pending() => self.toast(crate::i18n::t(STILL_LOADING).into()),
                 Some(p) => self.send(Action::ExportPlaylist(Box::new(p.clone()))),
                 None => {}
             },
@@ -894,7 +957,7 @@ impl AppState {
                 }
             }
             UiAction::BackupLibrary if !self.local.fully_loaded() => {
-                self.toast(STILL_LOADING.into());
+                self.toast(crate::i18n::t(STILL_LOADING).into());
             }
             UiAction::BackupLibrary => {
                 self.send(Action::BackupLibrary(
@@ -924,7 +987,7 @@ impl AppState {
                         }
                         self.language_changed(lang.hl());
                     }
-                    self.toast("Backup restored".into());
+                    self.toast(crate::i18n::t("Backup restored").into());
                 }
             }
             UiAction::ConfirmDeletePlaylist(id) => {
@@ -936,7 +999,7 @@ impl AppState {
                     if self.route == Route::Playlist(id) {
                         self.back();
                     }
-                    self.toast("Playlist deleted".into());
+                    self.toast(crate::i18n::t("Playlist deleted").into());
                 }
             }
             UiAction::PlayTracks(tracks, start) => self.play_tracks(tracks, start),
@@ -1111,7 +1174,10 @@ impl AppState {
                         self.search.set_items(page.items);
                         self.search.continuation = page.continuation;
                     }
-                    Err(e) => self.search.error = Some(e),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "search failed");
+                        self.search.error = Some(e);
+                    }
                 }
             }
             Event::SearchMoreDone { seq, result } if seq == self.search.seq => {
@@ -1121,7 +1187,10 @@ impl AppState {
                         self.search.append_items(page.items);
                         self.search.continuation = page.continuation;
                     }
-                    Err(e) => self.toast(format!("Could not load more: {e}")),
+                    Err(e) => self.toast(
+                        crate::i18n::t("Could not load more: {}")
+                            .replace("{}", &friendly_error(&e)),
+                    ),
                 }
             }
             Event::Suggestions { seq, items } if seq == self.search.suggest_seq => {
@@ -1167,7 +1236,10 @@ impl AppState {
                         next.continuation = token;
                         self.playlists.insert(id, Load::Ready(Arc::new(next)));
                     }
-                    (Err(e), _) => self.toast(format!("Could not load more tracks: {e}")),
+                    (Err(e), _) => self.toast(
+                        crate::i18n::t("Could not load more tracks: {}")
+                            .replace("{}", &friendly_error(&e)),
+                    ),
                     _ => {}
                 }
             }
@@ -1206,7 +1278,10 @@ impl AppState {
                     }
                 }
                 if let Some(e) = problem {
-                    self.toast(format!("Some playlists could not be read: {e}"));
+                    self.toast(
+                        crate::i18n::t("Some playlists could not be read: {}")
+                            .replace("{}", &e.to_string()),
+                    );
                 }
                 self.menu_version += 1;
             }
@@ -1215,7 +1290,11 @@ impl AppState {
                 let id = self.local.create_playlist(&title, tracks);
                 self.local_changed();
                 self.navigate(Route::Playlist(id));
-                self.toast(format!("Imported “{title}” ({n} songs)"));
+                self.toast(
+                    crate::i18n::t("Imported “{}” ({} songs)")
+                        .replacen("{}", &title, 1)
+                        .replacen("{}", &n.to_string(), 1),
+                );
             }
             Event::RestoreRequested(lib, settings) => {
                 self.pending_restore = Some(lib);
@@ -1233,7 +1312,9 @@ impl AppState {
                 }
             }
             Event::DataDirMoved(path) => {
-                self.toast(format!("Data moved to {}", path.display()));
+                self.toast(
+                    crate::i18n::t("Data moved to {}").replace("{}", &path.display().to_string()),
+                );
                 self.data_dir = path;
             }
             Event::Toast(text) => self.toast(text),
@@ -2273,6 +2354,31 @@ mod tests {
             app.menu_version > 0,
             "menus refresh when the library is installed"
         );
+    }
+
+    #[test]
+    fn friendly_error_hides_urls_but_keeps_other_messages() {
+        let raw = "network error: error sending request for url (https://music.youtube.com/x)";
+        assert!(!friendly_error(raw).contains("https://"));
+        assert!(!friendly_error("json error: eof").contains("eof"));
+        assert_eq!(
+            friendly_error("track is not playable: x"),
+            "track is not playable: x"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_the_queue_can_be_undone_once() {
+        let (mut app, _rx) = state();
+        app.ps.tracks = Arc::new(vec![track("a"), track("b")]);
+        app.ps.current = Some(1);
+        app.run(UiAction::ClearQueue);
+        let (saved, playing) = app.cleared_queue.clone().unwrap();
+        assert_eq!(saved.tracks.len(), 2);
+        assert_eq!(saved.tracks[saved.current].video_id, "b");
+        assert!(!playing);
+        app.run(UiAction::UndoClearQueue);
+        assert!(app.cleared_queue.is_none());
     }
 
     #[test]

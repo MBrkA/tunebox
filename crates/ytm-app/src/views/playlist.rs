@@ -201,8 +201,10 @@ fn local(ui: &mut Ui, app: &mut AppState, id: &str) {
                 ui.vertical_centered(|ui| ui.spinner());
             } else if playlist.tracks.is_empty() {
                 ui.label(
-                    egui::RichText::new("Empty. Right-click any song → Add to playlist.")
-                        .color(c_text_dim()),
+                    egui::RichText::new(crate::i18n::t(
+                        "Empty. Right-click any song → Add to playlist.",
+                    ))
+                    .color(c_text_dim()),
                 );
             }
             if editing {
@@ -216,7 +218,7 @@ fn local(ui: &mut Ui, app: &mut AppState, id: &str) {
                         out.push(UiAction::PlayTracks(playlist.tracks.clone(), i));
                     }
                     let pid = playlist.id.clone();
-                    common::track_menu_with(&r, t, &mut out, |ui, out| {
+                    common::row_menu_with(ui, &r, t, &mut out, |ui, out| {
                         if ui
                             .button(crate::i18n::t("Remove from this playlist"))
                             .clicked()

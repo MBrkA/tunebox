@@ -48,7 +48,10 @@ fn sections() -> Vec<Section> {
             t("Navigation"),
             vec![
                 (format!("{c} + K  /  /"), t("Search")),
-                (format!("{c} + 1…4"), t("Home, Explore, Library, Playlists")),
+                (
+                    format!("{c} + 1…5"),
+                    t("Home, Explore, Library, Playlists, History"),
+                ),
                 (format!("{c} + ,"), t("Settings")),
                 (format!("{} + ←", alt()), t("Back")),
                 ("Q".into(), t("Queue")),
@@ -67,7 +70,7 @@ pub fn show(ctx: &Context, app: &mut AppState) {
     let mut close = false;
     let height = ctx.content_rect().height();
     let width = crate::layout::dialog_width(ctx.content_rect().width()) + 40.0;
-    super::dialogs::window("Keyboard shortcuts").show(ctx, |ui| {
+    super::dialogs::window(crate::i18n::t("Keyboard shortcuts")).show(ctx, |ui| {
         ui.set_width(width);
         ui.label(
             theme::bold(t("Keyboard shortcuts"))

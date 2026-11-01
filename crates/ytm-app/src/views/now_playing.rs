@@ -48,6 +48,8 @@ pub fn show(ui: &mut Ui, app: &mut AppState, thumbs: &Arc<ThumbLoader>, open_t: 
         .translate(vec2(0.0, (1.0 - open_t) * 48.0));
     let mut out: Vec<UiAction> = Vec::new();
     let mut close = false;
+    let mut toggle_lyrics = false;
+    let two_col = inner.width() >= 820.0;
 
     // Header
     let header = Rect::from_min_size(inner.min, vec2(inner.width(), 48.0));
@@ -63,13 +65,23 @@ pub fn show(ui: &mut Ui, app: &mut AppState, thumbs: &Arc<ThumbLoader>, open_t: 
                     .size(15.0)
                     .color(c_text()),
             );
+            if !two_col {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    toggle_lyrics =
+                        widgets::pill(ui, crate::i18n::t("Lyrics"), app.now_playing_lyrics)
+                            .clicked();
+                });
+            }
         });
     });
+    if toggle_lyrics {
+        app.now_playing_lyrics = !app.now_playing_lyrics;
+    }
 
     let body = Rect::from_min_max(pos2(inner.left(), header.bottom() + 8.0), inner.max);
-    let two_col = body.width() >= 820.0;
     let art_size = if two_col {
-        (body.height() - 120.0)
+        // what is left has to fit the title, artist, heart and album
+        (body.height() - 210.0)
             .clamp(220.0, 460.0)
             .min(body.width() * 0.45)
     } else {
@@ -89,86 +101,91 @@ pub fn show(ui: &mut Ui, app: &mut AppState, thumbs: &Arc<ThumbLoader>, open_t: 
         ),
         vec2(art_size, body.height() - 8.0),
     );
-    ui.scope_builder(UiBuilder::new().max_rect(left), |ui| {
-        let (rect, _) = ui.allocate_exact_size(vec2(art_size, art_size), Sense::hover());
-        // Soft shadow: stacked low-alpha layers that share the art's corner radius, so no hard dark
-        // box shows past the cover's edges.
-        for i in 1..=6u8 {
-            let grow = f32::from(i) * 3.0;
-            ui.painter().rect_filled(
-                rect.translate(vec2(0.0, 6.0)).expand(grow),
-                CornerRadius::same(theme::CARD_RADIUS + 2 + i * 3),
-                Color32::from_black_alpha(14),
+    let lyrics_only = !two_col && app.now_playing_lyrics;
+    if lyrics_only {
+        ui.scope_builder(UiBuilder::new().max_rect(body), |ui| lyrics(ui, app));
+    } else {
+        ui.scope_builder(UiBuilder::new().max_rect(left), |ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(art_size, art_size), Sense::hover());
+            // Soft shadow: stacked low-alpha layers that share the art's corner radius, so no hard dark
+            // box shows past the cover's edges.
+            for i in 1..=6u8 {
+                let grow = f32::from(i) * 3.0;
+                ui.painter().rect_filled(
+                    rect.translate(vec2(0.0, 6.0)).expand(grow),
+                    CornerRadius::same(theme::CARD_RADIUS + 2 + i * 3),
+                    Color32::from_black_alpha(14),
+                );
+            }
+            widgets::paint_art(
+                ui,
+                rect,
+                art_url.as_deref(),
+                CornerRadius::same(theme::CARD_RADIUS + 2),
             );
-        }
-        widgets::paint_art(
-            ui,
-            rect,
-            art_url.as_deref(),
-            CornerRadius::same(theme::CARD_RADIUS + 2),
-        );
-        ui.add_space(18.0);
-        ui.add(egui::Label::new(theme::bold(&track.title).size(26.0).color(c_text())).truncate());
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            for (i, a) in track.artists.iter().enumerate() {
-                if i > 0 {
-                    ui.label(egui::RichText::new(", ").color(c_text_dim()).size(16.0));
+            ui.add_space(18.0);
+            ui.add(
+                egui::Label::new(theme::bold(&track.title).size(26.0).color(c_text())).truncate(),
+            );
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                for (i, a) in track.artists.iter().enumerate() {
+                    if i > 0 {
+                        ui.label(egui::RichText::new(", ").color(c_text_dim()).size(16.0));
+                    }
+                    let font = FontId::proportional(16.0);
+                    match &a.id {
+                        Some(id) => {
+                            if widgets::link_text(ui, &a.name, font, c_text_dim()).clicked() {
+                                out.push(UiAction::Go(Route::Artist(id.clone())));
+                            }
+                        }
+                        None => {
+                            ui.label(egui::RichText::new(&a.name).font(font).color(c_text_dim()));
+                        }
+                    }
                 }
-                let font = FontId::proportional(16.0);
-                match &a.id {
+            });
+            ui.add_space(6.0);
+            let liked = app.is_liked(&track.video_id);
+            let tip = if liked {
+                crate::i18n::t("Remove from liked songs")
+            } else {
+                crate::i18n::t("Add to liked songs")
+            };
+            let clicked = if liked {
+                widgets::icon_button_filled(ui, icon::HEART, 24.0, true, tip).clicked()
+            } else {
+                widgets::icon_button(ui, icon::HEART, 24.0, false, tip).clicked()
+            };
+            if clicked {
+                out.push(UiAction::ToggleLike(track.clone()));
+            }
+            if let Some(album) = &track.album {
+                ui.horizontal(|ui| match &album.id {
                     Some(id) => {
-                        if widgets::link_text(ui, &a.name, font, c_text_dim()).clicked() {
-                            out.push(UiAction::Go(Route::Artist(id.clone())));
+                        if widgets::link_text(
+                            ui,
+                            &album.name,
+                            FontId::proportional(14.0),
+                            theme::c_text_faint(),
+                        )
+                        .clicked()
+                        {
+                            out.push(UiAction::Go(Route::Album(id.clone())));
                         }
                     }
                     None => {
-                        ui.label(egui::RichText::new(&a.name).font(font).color(c_text_dim()));
+                        ui.label(egui::RichText::new(&album.name).color(theme::c_text_faint()));
                     }
-                }
+                });
             }
         });
-        ui.add_space(6.0);
-        let liked = app.is_liked(&track.video_id);
-        let tip = if liked {
-            crate::i18n::t("Remove from liked songs")
-        } else {
-            crate::i18n::t("Add to liked songs")
-        };
-        let clicked = if liked {
-            widgets::icon_button_filled(ui, icon::HEART, 24.0, true, tip).clicked()
-        } else {
-            widgets::icon_button(ui, icon::HEART, 24.0, false, tip).clicked()
-        };
-        if clicked {
-            out.push(UiAction::ToggleLike(track.clone()));
-        }
-        if let Some(album) = &track.album {
-            ui.horizontal(|ui| match &album.id {
-                Some(id) => {
-                    if widgets::link_text(
-                        ui,
-                        &album.name,
-                        FontId::proportional(14.0),
-                        theme::c_text_faint(),
-                    )
-                    .clicked()
-                    {
-                        out.push(UiAction::Go(Route::Album(id.clone())));
-                    }
-                }
-                None => {
-                    ui.label(egui::RichText::new(&album.name).color(theme::c_text_faint()));
-                }
-            });
-        }
-    });
+    }
 
     if two_col {
         let right = Rect::from_min_max(pos2(left.right() + 56.0, body.top() + 8.0), body.max);
         ui.scope_builder(UiBuilder::new().max_rect(right), |ui| lyrics(ui, app));
-    } else {
-        // Narrow windows: lyrics below the artwork would not fit; they are a wide-layout feature.
     }
 
     if close {
@@ -260,7 +277,7 @@ fn synced_lyrics(ui: &mut Ui, app: &mut AppState, l: &ytm_api::Lyrics) {
                 let color = if is_current {
                     c_text()
                 } else {
-                    c_text().gamma_multiply(0.45)
+                    c_text().gamma_multiply(0.62)
                 };
                 let r = ui.add(
                     egui::Label::new(

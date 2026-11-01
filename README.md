@@ -71,7 +71,7 @@ want some music. Tunebox talks to YouTube directly, decodes the audio itself and
    | **Windows 10/11** (x64) | `.zip` | Unzip and run `tunebox.exe`. Unsigned, so SmartScreen will warn. |
 
 2. Open Tunebox and search for a song, artist or album (`Ctrl`+`K` or `/`).
-3. Press play. Heart songs to like them, right-click to *Add to playlist*.
+3. Press play. Heart songs to like them; use `⋯` or right-click to *Add to playlist*.
 
 Your library lives in a folder on your computer (Settings → Application data shows it, can move it and back it up).
 On GNOME the tray icon needs the AppIndicator extension, which Ubuntu ships enabled. More in the

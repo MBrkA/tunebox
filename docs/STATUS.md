@@ -58,7 +58,7 @@ drag itself was not done by hand). Not run on Linux or Windows.
 * Synced lyrics need LRCLIB to have the song (it covers most popular songs); otherwise YouTube's plain text is shown. Home is short (YouTube serves anonymous users only a couple of shelves);
   the app pads it with Explore sections.
 * No downloads/offline mode. The tray icon and notifications are verified only on Ubuntu 24.04 (GNOME/Wayland and XWayland). On macOS and Windows the `tray-icon` path compiles (Windows cross-compiled); the macOS app has been run but its menu-bar icon and notifications were not specifically checked, and nothing has run on Windows.
-* Narrow windows adapt: below 1000 px the sidebar becomes an icon rail, below 900 / 700 px the player bar drops the volume slider, then the track text and shuffle/repeat (the shortcuts still work), and the lyrics column of the now-playing view is hidden below 820 px. The smallest window is 640×480.
+* Narrow windows adapt: below 1000 px the sidebar becomes an icon rail, below 900 / 700 px the player bar drops the volume slider, then the track text and shuffle/repeat (the shortcuts still work), and below 820 px the now-playing view shows the artwork or the lyrics, switched by a Lyrics button. The smallest window is 640×480.
 * Explore has all three of YouTube's sections: New releases, Charts (with a country picker) and Moods & genres (shortcuts, a full page, and each category's playlists). Chart rows that are not songs, albums, artists or playlists (e.g. podcast shows) are not shown.
 
 ## Next steps

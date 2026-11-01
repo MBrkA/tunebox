@@ -122,22 +122,7 @@ impl TuneboxApp {
     }
 
     fn session_snapshot(&self) -> crate::session::Session {
-        let ps = &self.state.ps;
-        let (tracks, current) = match ps.current {
-            // a shuffled queue is reshuffled on restore, so only the unshuffled order is worth keeping
-            Some(cur) if !ps.shuffle => {
-                let (order, at) = crate::session::save_order(ps.tracks.len(), cur, &ps.upcoming);
-                (order.iter().map(|&i| ps.tracks[i].clone()).collect(), at)
-            }
-            cur => (ps.tracks.as_ref().clone(), cur.unwrap_or(0)),
-        };
-        crate::session::Session {
-            tracks,
-            current,
-            position_ms: self.state.player.position().as_millis() as u64,
-            shuffle: ps.shuffle,
-            repeat: crate::session::repeat_code(ps.repeat),
-        }
+        self.state.session_snapshot()
     }
 
     /// Persists the play session when the queue/track changed, and every few seconds while
@@ -403,6 +388,7 @@ pub(crate) fn handle_shortcuts(ctx: &egui::Context, st: &mut AppState) {
             (Key::Num2, Route::Explore),
             (Key::Num3, Route::Library),
             (Key::Num4, Route::Playlists),
+            (Key::Num5, Route::History),
             (Key::Comma, Route::Settings),
         ] {
             if i.consume_key(cmd, key) {

@@ -43,7 +43,7 @@ pub fn show(ui: &mut Ui, app: &mut AppState) {
         common::message(
             ui,
             crate::i18n::t("No results"),
-            &format!("Nothing found for “{}”.", app.search.query),
+            &crate::i18n::t("Nothing found for “{}”.").replace("{}", &app.search.query),
         );
         return;
     }
@@ -77,10 +77,9 @@ fn track_list(ui: &mut Ui, app: &mut AppState, out: &mut Vec<UiAction>) {
     let playing = ps.status == ytm_player::Status::Playing;
     let has_more = app.search.continuation.is_some();
     let mut want_more = false;
-    let row_h = ROW_HEIGHT + ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical()
         .auto_shrink(false)
-        .show_rows(ui, row_h, n, |ui, range| {
+        .show_rows(ui, ROW_HEIGHT, n, |ui, range| {
             want_more = range.end + 4 >= n && has_more;
             for i in range {
                 let t: &Track = &tracks[i];
@@ -89,7 +88,7 @@ fn track_list(ui: &mut Ui, app: &mut AppState, out: &mut Vec<UiAction>) {
                 if r.clicked() {
                     out.push(UiAction::PlayTracks((*tracks).clone(), i));
                 }
-                common::track_menu(&r, t, out);
+                common::row_menu(ui, &r, t, out);
             }
         });
     if want_more {

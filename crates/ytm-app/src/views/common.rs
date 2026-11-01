@@ -25,7 +25,7 @@ pub fn error_panel(ui: &mut Ui, title: &str, detail: &str) -> bool {
         ui.add_space(ui.available_height().min(600.0) * 0.25);
         ui.label(egui::RichText::new(title).text_style(egui::TextStyle::Heading));
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(detail).color(c_text_dim()));
+        ui.label(egui::RichText::new(crate::state::friendly_error(detail)).color(c_text_dim()));
         ui.add_space(14.0);
         retry = widgets::pill(ui, crate::i18n::t("Try again"), true).clicked();
     });
@@ -77,6 +77,85 @@ pub fn track_menu(resp: &Response, track: &Track, out: &mut Vec<UiAction>) {
     track_menu_with(resp, track, out, |_, _| {});
 }
 
+/// A list row's heart and "more" buttons, plus its context menu: what `track_menu` offers on right
+/// click, reachable without it.
+pub fn row_menu(ui: &mut Ui, resp: &Response, track: &Track, out: &mut Vec<UiAction>) {
+    row_menu_with(ui, resp, track, out, |_, _| {});
+}
+
+/// [`row_menu`] with extra entries at the top of the menu (see [`track_menu_with`]).
+pub fn row_menu_with(
+    ui: &mut Ui,
+    resp: &Response,
+    track: &Track,
+    out: &mut Vec<UiAction>,
+    extra: impl FnOnce(&mut Ui, &mut Vec<UiAction>),
+) {
+    let open = row_actions(ui, resp, track, out);
+    show_track_menu(resp, track, out, open, extra);
+}
+
+/// Draws the row's buttons; true when "more" was clicked. They appear while the pointer or the
+/// keyboard focus is on the row. A liked song keeps its heart, so the list shows what is liked.
+fn row_actions(ui: &mut Ui, resp: &Response, track: &Track, out: &mut Vec<UiAction>) -> bool {
+    const BUTTON: f32 = 32.0;
+    /// From the row's right edge to the buttons: clears the duration.
+    const INSET: f32 = 64.0;
+    if !ui.is_rect_visible(resp.rect) {
+        return false;
+    }
+    let inner_focus = resp.id.with("actions_focus");
+    let active = ui.rect_contains_pointer(resp.rect)
+        || resp.has_focus()
+        || ui
+            .data(|d| d.get_temp::<bool>(inner_focus))
+            .unwrap_or(false);
+    let liked = menu_data(&resp.ctx).liked.contains(&track.video_id);
+    if !active && !liked {
+        return false;
+    }
+    let y = resp.rect.center().y;
+    let more_x = resp.rect.right() - INSET - BUTTON / 2.0;
+    let place = |x: f32| Rect::from_center_size(egui::pos2(x, y), egui::Vec2::splat(BUTTON));
+    let mut child = |salt: &str, x: f32| {
+        ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(resp.id.with(salt))
+                .max_rect(place(x)),
+        )
+    };
+
+    let (mut heart_ui, mut more_ui) = (child("heart", more_x - BUTTON), child("more", more_x));
+    let tip = if liked {
+        crate::i18n::t("Remove from liked songs")
+    } else {
+        crate::i18n::t("Add to liked songs")
+    };
+    let heart = if liked {
+        widgets::icon_button_filled(&mut heart_ui, egui_phosphor::fill::HEART, 16.0, true, tip)
+    } else {
+        widgets::icon_button(&mut heart_ui, icon::HEART, 16.0, false, tip)
+    };
+    if heart.clicked() {
+        out.push(UiAction::ToggleLike(track.clone()));
+    }
+    let mut focused = heart.has_focus();
+    let mut open = false;
+    if active {
+        let more = widgets::icon_button(
+            &mut more_ui,
+            icon::DOTS_THREE,
+            16.0,
+            false,
+            crate::i18n::t("More actions"),
+        );
+        open = more.clicked();
+        focused |= more.has_focus();
+    }
+    ui.data_mut(|d| d.insert_temp(inner_focus, focused));
+    open
+}
+
 /// Like [`track_menu`], with extra entries (e.g. crate::i18n::t("Remove from playlist")) at the top.
 pub fn track_menu_with(
     resp: &Response,
@@ -84,8 +163,21 @@ pub fn track_menu_with(
     out: &mut Vec<UiAction>,
     extra: impl FnOnce(&mut Ui, &mut Vec<UiAction>),
 ) {
+    show_track_menu(resp, track, out, false, extra);
+}
+
+fn show_track_menu(
+    resp: &Response,
+    track: &Track,
+    out: &mut Vec<UiAction>,
+    open: bool,
+    extra: impl FnOnce(&mut Ui, &mut Vec<UiAction>),
+) {
     let md = menu_data(&resp.ctx);
     let mut popup = egui::Popup::context_menu(resp);
+    if open {
+        popup = popup.open_memory(egui::SetOpenCommand::Bool(true));
+    }
     // Dev only (`--open-menu`): keep the first song's menu open so it can be screenshotted.
     if crate::DEV_OPEN_MENU.load(std::sync::atomic::Ordering::Relaxed) {
         static FIRST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -190,7 +282,7 @@ pub fn track_rows(
         if r.clicked() {
             out.push(UiAction::PlayTracks(tracks.to_vec(), i));
         }
-        track_menu(&r, t, out);
+        row_menu(ui, &r, t, out);
     }
 }
 
